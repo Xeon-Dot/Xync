@@ -981,6 +981,14 @@ def daemon_start(
             help="API server port. Overrides api_port from config.",
         ),
     ] = None,
+    foreground: Annotated[
+        bool,
+        typer.Option(
+            "--foreground",
+            "-f",
+            help="Run in foreground (for systemd).",
+        ),
+    ] = False,
     config_dir: ConfigDirOption = None,
 ) -> None:
     """Start the background sync daemon.
@@ -1027,7 +1035,8 @@ def daemon_start(
             f"(interval={sync_interval}s, log={log_file})"
         )
 
-    daemonize(log_file)
+    if not foreground:
+        daemonize(log_file)
     run_daemon_loop(
         cfg_dir, names if names else None, sync_interval, enable_api, final_api_port
     )
@@ -1153,6 +1162,98 @@ def daemon_restart(
         api_port=api_port,
         config_dir=config_dir,
     )
+
+
+_SYSTEMD_UNIT = """\
+[Unit]
+Description=xync mirror sync daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart={exec_start}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy={wanted_by}
+"""
+
+
+@daemon_app.command("install")
+def daemon_install(
+    names: Annotated[
+        Optional[list[str]],
+        typer.Argument(
+            help="Mirror name(s) to sync. Omit to sync all enabled mirrors."
+        ),
+    ] = None,
+    system: Annotated[
+        bool,
+        typer.Option("--system", help="Install as system service (requires root)."),
+    ] = False,
+    config_dir: ConfigDirOption = None,
+) -> None:
+    """Install xync daemon as a systemd service."""
+    import subprocess  # noqa: PLC0415
+
+    cfg_dir = get_config_dir(config_dir)
+    xync_bin = shutil.which("xync")
+    if not xync_bin:
+        rprint("[red]Error:[/red] xync not found on PATH.")
+        raise typer.Exit(1)
+
+    cmd_parts = [xync_bin, "daemon", "start", "--foreground", "-C", str(cfg_dir)]
+    if names:
+        cmd_parts.extend(names)
+    exec_start = " ".join(cmd_parts)
+
+    if system:
+        unit_dir = Path("/etc/systemd/system")
+        wanted_by = "multi-user.target"
+        systemctl = ["systemctl"]
+    else:
+        unit_dir = Path.home() / ".config" / "systemd" / "user"
+        wanted_by = "default.target"
+        systemctl = ["systemctl", "--user"]
+
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    unit_path = unit_dir / "xync-daemon.service"
+    unit_path.write_text(
+        _SYSTEMD_UNIT.format(exec_start=exec_start, wanted_by=wanted_by)
+    )
+
+    subprocess.run([*systemctl, "daemon-reload"], check=True)
+    subprocess.run([*systemctl, "enable", "--now", "xync-daemon"], check=True)
+    rprint(f"[green]✓ Installed and started xync-daemon service[/green] ({unit_path})")
+
+
+@daemon_app.command("uninstall")
+def daemon_uninstall(
+    system: Annotated[
+        bool,
+        typer.Option("--system", help="Remove system service (requires root)."),
+    ] = False,
+) -> None:
+    """Remove the xync daemon systemd service."""
+    import subprocess  # noqa: PLC0415
+
+    if system:
+        unit_path = Path("/etc/systemd/system/xync-daemon.service")
+        systemctl = ["systemctl"]
+    else:
+        unit_path = Path.home() / ".config" / "systemd" / "user" / "xync-daemon.service"
+        systemctl = ["systemctl", "--user"]
+
+    if not unit_path.exists():
+        rprint("[yellow]Service unit file not found.[/yellow]")
+        return
+
+    subprocess.run([*systemctl, "disable", "--now", "xync-daemon"], check=False)
+    unit_path.unlink()
+    subprocess.run([*systemctl, "daemon-reload"], check=True)
+    rprint("[green]✓ Removed xync-daemon service.[/green]")
 
 
 # ---------------------------------------------------------------------------

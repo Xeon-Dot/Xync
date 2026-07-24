@@ -46,7 +46,7 @@ jobs:
     name: Publish to PyPI
     if: github.event_name == 'release' && github.event.action == 'published'
     needs: ci
-    runs-on: blacksmith-2vcpu-ubuntu-2404-arm
+    runs-on: blacksmith
     environment:
       name: pypi
       url: https://pypi.org/p/xync

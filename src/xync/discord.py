@@ -6,6 +6,7 @@ import logging
 from typing import Optional
 
 import httpx
+
 from xync.models import DiscordConfig, SyncStatus
 
 logger = logging.getLogger(__name__)

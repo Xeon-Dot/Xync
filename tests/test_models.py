@@ -2,6 +2,7 @@
 
 import pytest
 from pydantic import ValidationError
+
 from xync.models import GlobalConfig, Mirror, MirrorType, SyncStatus, xyncConfig
 
 

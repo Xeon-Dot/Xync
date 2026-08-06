@@ -1,6 +1,7 @@
 """Tests for xync.config."""
 
 import pytest
+
 from xync.config import get_config_path, load_config, save_config
 from xync.models import Mirror, MirrorType, xyncConfig
 

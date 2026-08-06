@@ -11,6 +11,7 @@ from typing import Optional
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
 from xync.config import get_config_dir, load_config
 from xync.models import SyncStatus
 

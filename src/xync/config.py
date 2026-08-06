@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 import tomli_w
+
 from xync.models import (
     DiscordConfig,
     GlobalConfig,

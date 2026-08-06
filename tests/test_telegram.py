@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import httpx
+
 from xync.models import SyncStatus, TelegramConfig
 from xync.telegram import (
     notify_disk_usage_warning,

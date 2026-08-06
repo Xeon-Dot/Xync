@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import httpx
+
 from xync.discord import (
     notify_disk_usage_warning,
     notify_sync_finish,

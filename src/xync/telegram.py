@@ -6,6 +6,7 @@ import logging
 from typing import Optional
 
 import httpx
+
 from xync.models import SyncStatus, TelegramConfig
 
 logger = logging.getLogger(__name__)

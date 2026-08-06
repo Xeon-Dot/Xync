@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from xync.models import Mirror, MirrorType, SyncStatus
 from xync.sync import (
     _build_rsync_command,
@@ -236,10 +237,9 @@ class TestAcquireLock:
 
     def test_clears_stale_lock_from_dead_process(self, tmp_path):
         lock_path = tmp_path / "test.lock"
-        # PID 1 is always init/systemd on Linux; on Windows it's the System Idle Process.
-        # Either way, it's never our process, so we can't own its lock.
-        # Use a PID that is guaranteed not to exist: max PID + 1 overflows to an invalid PID.
-        # A simpler approach: write a PID that we know is dead by using a non-existent PID.
+        # PID 1 is init/systemd on Linux, System Idle Process on Windows —
+        # never our process, so we can't own its lock. Use a PID that is
+        # guaranteed not to exist: max PID + 1 overflows to an invalid PID.
         lock_path.write_text("999999999")  # PID that cannot exist
         assert acquire_lock(lock_path) is True
         assert lock_path.exists()

@@ -316,6 +316,12 @@ class TestConfigCommands:
         )
         assert result.exit_code != 0
 
+    def test_config_set_rejects_bare_nested_section(self, tmp_path):
+        result = runner.invoke(
+            app, ["config", "set", "telegram", "foo"] + make_cfg_opt(tmp_path)
+        )
+        assert result.exit_code != 0
+
 
 class TestSync:
     def test_sync_no_mirrors(self, tmp_path):

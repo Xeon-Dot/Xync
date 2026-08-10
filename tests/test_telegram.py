@@ -1,8 +1,6 @@
 """Tests for xync.telegram notification module."""
 
-from unittest.mock import MagicMock, patch
-
-import httpx
+from unittest.mock import patch
 
 from xync.models import SyncStatus, TelegramConfig
 from xync.telegram import (
@@ -18,28 +16,21 @@ from xync.telegram import (
 
 class TestSendTelegramMessage:
     def test_successful_send(self):
-        mock_response = MagicMock()
-        mock_response.raise_for_status.return_value = None
-        with patch("xync.telegram.httpx.post", return_value=mock_response) as mock_post:
+        with patch("xync.telegram.post_json", return_value=True) as mock_post:
             result = send_telegram_message("token123", "chat456", "Hello!")
         assert result is True
         mock_post.assert_called_once()
-        _, kwargs = mock_post.call_args
-        assert kwargs["json"]["chat_id"] == "chat456"
-        assert kwargs["json"]["text"] == "Hello!"
+        url, payload = mock_post.call_args[0]
+        assert payload["chat_id"] == "chat456"
+        assert payload["text"] == "Hello!"
 
     def test_http_error_returns_false(self):
-        with patch(
-            "xync.telegram.httpx.post",
-            side_effect=httpx.HTTPError("network error"),
-        ):  # noqa: E501
+        with patch("xync.telegram.post_json", return_value=False):
             result = send_telegram_message("token", "chat", "msg")
         assert result is False
 
     def test_uses_correct_api_url(self):
-        mock_response = MagicMock()
-        mock_response.raise_for_status.return_value = None
-        with patch("xync.telegram.httpx.post", return_value=mock_response) as mock_post:
+        with patch("xync.telegram.post_json", return_value=True) as mock_post:
             send_telegram_message("mytoken", "mychat", "test")
         url = mock_post.call_args[0][0]
         assert "mytoken" in url

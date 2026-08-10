@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import logging
+import fcntl
 import os
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -14,41 +15,29 @@ from typing import Callable, Optional
 from xync.models import Mirror, MirrorType, SyncStatus
 from xync.utils import get_directory_size
 
-logger = logging.getLogger(__name__)
-
 # Matches rsync --info=progress2 lines: "to-chk=<remaining>/<total>"
 _RSYNC_TOCHK_RE = re.compile(r"to-chk=(\d+)/(\d+)")
 
 
+@dataclass
 class SyncResult:
     """Result of a single mirror sync run."""
 
-    def __init__(
-        self,
-        mirror_name: str,
-        status: SyncStatus,
-        duration_seconds: float = 0.0,
-        log_path: Optional[Path] = None,
-        error: Optional[str] = None,
-        size_bytes: Optional[int] = None,
-    ) -> None:
-        self.mirror_name = mirror_name
-        self.status = status
-        self.duration_seconds = duration_seconds
-        self.log_path = log_path
-        self.error = error
-        self.size_bytes = size_bytes
-
-    def __repr__(self) -> str:
-        return (
-            f"SyncResult(mirror={self.mirror_name!r}, status={self.status.value!r}, "
-            f"duration={self.duration_seconds:.1f}s)"
-        )
+    mirror_name: str
+    status: SyncStatus
+    duration_seconds: float = 0.0
+    log_path: Optional[Path] = None
+    error: Optional[str] = None
+    size_bytes: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
 # Lock helpers
 # ---------------------------------------------------------------------------
+
+
+# Open file descriptors for locks held by this process, keyed by lock path.
+_held_locks: dict[str, int] = {}
 
 
 def _get_lock_path(log_dir: Path, mirror_name: str) -> Path:
@@ -58,50 +47,32 @@ def _get_lock_path(log_dir: Path, mirror_name: str) -> Path:
 
 
 def acquire_lock(lock_path: Path) -> bool:
-    """Try to acquire a lock file atomically.
+    """Acquire an exclusive ``flock`` on *lock_path*.
 
     Returns *True* if the lock was acquired, *False* if it is already held.
-    Clears stale lock files left by processes that terminated unexpectedly.
+    ``flock`` is released automatically by the kernel if the holding process
+    exits or crashes, so no stale-lock detection is required.
     """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
     try:
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, str(os.getpid()).encode())
-        os.close(fd)
-        return True
-    except FileExistsError:
-        pass
-
-    # Lock file exists — check whether the owning process is still alive.
-    stale = False
-    try:
-        pid = int(lock_path.read_text().strip())
-        os.kill(pid, 0)
-    except (ValueError, FileNotFoundError):
-        stale = True  # unreadable or already gone
-    except ProcessLookupError:
-        stale = True  # process is dead
-    except PermissionError:
-        stale = False  # process alive, we lack signal permission
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        stale = True  # invalid PID or other OS-level error (e.g. Windows invalid param)
-
-    if not stale:
-        return False
-
-    logger.warning("Removing stale lock file %s", lock_path)
-    lock_path.unlink(missing_ok=True)
-    try:
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, str(os.getpid()).encode())
         os.close(fd)
-        return True
-    except FileExistsError:
         return False
+    _held_locks[str(lock_path)] = fd
+    return True
 
 
 def release_lock(lock_path: Path) -> None:
-    """Release a lock file, ignoring missing-file errors."""
-    lock_path.unlink(missing_ok=True)
+    """Release a lock acquired by :func:`acquire_lock`."""
+    fd = _held_locks.pop(str(lock_path), None)
+    if fd is None:
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +83,6 @@ def release_lock(lock_path: Path) -> None:
 def sync_mirror(
     mirror: Mirror,
     log_dir: Path,
-    dry_run: bool = False,
     verbose: bool = False,
     on_progress: Optional[Callable[[int], None]] = None,
 ) -> SyncResult:
@@ -121,7 +91,6 @@ def sync_mirror(
     Args:
         mirror: The mirror configuration to sync.
         log_dir: Directory where log files are written.
-        dry_run: If *True*, build the command but do not execute it.
         verbose: If *True*, print subprocess output to console.
         on_progress: Optional callback invoked with an integer 0–100 each time
             a new 10 % progress milestone is reached (rsync only).  The callback
@@ -152,21 +121,13 @@ def sync_mirror(
 
     try:
         try:
-            cmd = _build_command(mirror, check_tools=not dry_run)
+            cmd = _build_command(mirror)
         except FileNotFoundError as exc:
             return SyncResult(
                 mirror_name=mirror.name,
                 status=SyncStatus.FAILED,
                 log_path=log_path,
                 error=str(exc),
-            )
-
-        if dry_run:
-            return SyncResult(
-                mirror_name=mirror.name,
-                status=SyncStatus.PENDING,
-                log_path=log_path,
-                error=None,
             )
 
         Path(mirror.local_path).mkdir(parents=True, exist_ok=True)

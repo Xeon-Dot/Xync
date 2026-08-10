@@ -11,6 +11,7 @@ from xync.sync import (
     _inject_rsync_progress_flag,
     acquire_lock,
     purge_old_logs,
+    release_lock,
     sync_mirror,
 )
 
@@ -71,13 +72,6 @@ class TestBuildCommand:
 
 
 class TestSyncMirror:
-    def test_dry_run(self, rsync_mirror, tmp_path):
-        with patch("xync.sync.shutil.which", return_value="/usr/bin/rsync"):
-            result = sync_mirror(rsync_mirror, tmp_path / "logs", dry_run=True)
-        assert result.status == SyncStatus.PENDING
-        assert result.mirror_name == "ubuntu"
-        assert result.size_bytes is None
-
     def test_successful_sync(self, rsync_mirror, tmp_path):
         mock_result = MagicMock()
         mock_result.returncode = 0
@@ -227,24 +221,30 @@ class TestAcquireLock:
         lock_path = tmp_path / "test.lock"
         assert acquire_lock(lock_path) is True
         assert lock_path.exists()
+        release_lock(lock_path)
 
     def test_fails_when_lock_held_by_running_process(self, tmp_path):
+        import fcntl
         import os
 
         lock_path = tmp_path / "test.lock"
-        lock_path.write_text(str(os.getpid()))
-        assert acquire_lock(lock_path) is False
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            assert acquire_lock(lock_path) is False
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
-    def test_clears_stale_lock_from_dead_process(self, tmp_path):
+    def test_leftover_lock_file_does_not_block(self, tmp_path):
+        # flock is released with the process that held it, so a leftover file
+        # left by a dead process is always acquirable.
         lock_path = tmp_path / "test.lock"
-        # PID 1 is init/systemd on Linux, System Idle Process on Windows —
-        # never our process, so we can't own its lock. Use a PID that is
-        # guaranteed not to exist: max PID + 1 overflows to an invalid PID.
-        lock_path.write_text("999999999")  # PID that cannot exist
+        lock_path.write_text("999999999")
         assert acquire_lock(lock_path) is True
-        assert lock_path.exists()
+        release_lock(lock_path)
 
-    def test_stale_lock_allows_subsequent_sync(self, rsync_mirror, tmp_path):
+    def test_leftover_lock_allows_subsequent_sync(self, rsync_mirror, tmp_path):
         """A lock left by a dead process must not block the next sync."""
         log_dir = tmp_path / "logs"
         lock_dir = log_dir.parent / "locks"

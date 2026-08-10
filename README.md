@@ -266,19 +266,11 @@ xync log ubuntu --lines 100
 
 ### `xync health`
 
-설정 파일, 필수 도구, URL 스킴, 로컬 경로 권한, 디스크 사용률을 점검합니다.
+설정 파일, 필수 도구, URL 스킴, 로컬 경로 권한, 디스크 사용률, 알림 설정(텔레그램/디스코드)을 점검합니다.
 
 ```bash
 xync health
 xync health ubuntu
-```
-
-### `xync config validate`
-
-현재 설정의 유효성을 검사합니다.
-
-```bash
-xync config validate
 ```
 
 ---
@@ -611,7 +603,6 @@ xync health ubuntu
 
 ```bash
 xync config show
-xync config validate
 xync health
 ```
 

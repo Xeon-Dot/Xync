@@ -1,8 +1,6 @@
 """Tests for xync.discord notification module."""
 
-from unittest.mock import MagicMock, patch
-
-import httpx
+from unittest.mock import patch
 
 from xync.discord import (
     notify_disk_usage_warning,
@@ -18,32 +16,25 @@ from xync.models import DiscordConfig, SyncStatus
 
 class TestSendDiscordMessage:
     def test_successful_send(self):
-        mock_response = MagicMock()
-        mock_response.raise_for_status.return_value = None
-        with patch("xync.discord.httpx.post", return_value=mock_response) as mock_post:
+        with patch("xync.discord.post_json", return_value=True) as mock_post:
             result = send_discord_message(
                 "https://discord.com/api/webhooks/123/token", "Hello!"
             )
         assert result is True
         mock_post.assert_called_once()
-        _, kwargs = mock_post.call_args
-        assert kwargs["json"]["content"] == "Hello!"
+        _url, payload = mock_post.call_args[0]
+        assert payload["content"] == "Hello!"
 
     def test_http_error_returns_false(self):
-        with patch(
-            "xync.discord.httpx.post",
-            side_effect=httpx.HTTPError("network error"),
-        ):  # noqa: E501
+        with patch("xync.discord.post_json", return_value=False):
             result = send_discord_message(
                 "https://discord.com/api/webhooks/123/token", "msg"
             )
         assert result is False
 
     def test_uses_provided_webhook_url(self):
-        mock_response = MagicMock()
-        mock_response.raise_for_status.return_value = None
         url = "https://discord.com/api/webhooks/999/mytoken"
-        with patch("xync.discord.httpx.post", return_value=mock_response) as mock_post:
+        with patch("xync.discord.post_json", return_value=True) as mock_post:
             send_discord_message(url, "test")
         called_url = mock_post.call_args[0][0]
         assert called_url == url

@@ -165,20 +165,13 @@ def run_daemon_loop(
         api_port: Port for the API server.
     """
     # Late imports to avoid circular dependencies at module load time.
-    from xync.config import get_config_dir, load_config, save_config  # noqa: PLC0415
-    from xync.discord import (
-        notify_disk_usage_warning as notify_discord_disk_warning,  # noqa: PLC0415
-    )
+    from xync.config import get_config_dir, load_config  # noqa: PLC0415
     from xync.discord import (
         notify_sync_finish as notify_discord_finish,  # noqa: PLC0415
     )
     from xync.discord import notify_sync_result as notify_discord  # noqa: PLC0415
     from xync.discord import notify_sync_start as notify_discord_start  # noqa: PLC0415
-    from xync.models import SyncStatus  # noqa: PLC0415
     from xync.sync import purge_old_logs, sync_mirror  # noqa: PLC0415
-    from xync.telegram import (
-        notify_disk_usage_warning as notify_telegram_disk_warning,  # noqa: PLC0415
-    )
     from xync.telegram import (
         notify_sync_finish as notify_telegram_finish,  # noqa: PLC0415
     )
@@ -186,7 +179,11 @@ def run_daemon_loop(
     from xync.telegram import (
         notify_sync_start as notify_telegram_start,  # noqa: PLC0415
     )
-    from xync.utils import disk_usage_for_path, make_progress_callback  # noqa: PLC0415
+    from xync.utils import (  # noqa: PLC0415
+        make_progress_callback,
+        notify_disk_warning_if_needed,
+        record_sync_result,
+    )
 
     pid_file = get_pid_file(config_dir)
     pid_file.write_text(str(os.getpid()))
@@ -298,16 +295,7 @@ def run_daemon_loop(
 
                     # Reload config before saving to avoid clobbering concurrent edits.
                     cfg = load_config(config_dir)
-                    mirror.last_sync = datetime.now(tz=timezone.utc)
-                    mirror.last_status = result.status
-                    if (
-                        result.status == SyncStatus.SUCCESS
-                        and result.size_bytes is not None
-                    ):
-                        mirror.previous_size = mirror.last_size
-                        mirror.last_size = result.size_bytes
-                    cfg.mirrors[mirror.name] = mirror
-                    save_config(cfg, config_dir)
+                    record_sync_result(cfg, config_dir, mirror, result)
 
                     notify_telegram_finish(
                         cfg.global_config.telegram,
@@ -337,25 +325,7 @@ def run_daemon_loop(
                         result.duration_seconds,
                         result.error,
                     )
-                    usage = disk_usage_for_path(mirror.local_path)
-                    if usage is not None:
-                        usage_percent, usage_path = usage
-                        threshold = cfg.global_config.disk_usage_warning_percent
-                        if usage_percent >= threshold:
-                            notify_telegram_disk_warning(
-                                cfg.global_config.telegram,
-                                mirror.name,
-                                usage_percent,
-                                threshold,
-                                str(usage_path),
-                            )
-                            notify_discord_disk_warning(
-                                cfg.global_config.discord,
-                                mirror.name,
-                                usage_percent,
-                                threshold,
-                                str(usage_path),
-                            )
+                    notify_disk_warning_if_needed(cfg, mirror)
                     purge_old_logs(
                         log_dir_base / mirror.name,
                         mirror.name,

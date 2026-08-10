@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import signal
 import threading
 from pathlib import Path
 from typing import Optional
@@ -13,24 +12,20 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from xync.config import get_config_dir, load_config
+from xync.daemon import get_pid_file, is_running, read_pid, stop_daemon
 from xync.models import SyncStatus
+from xync.utils import format_size
+
+# API process management reuses the daemon's PID helpers.
+read_api_pid = read_pid
+is_api_running = is_running
+stop_api = stop_daemon
 
 _api_state: dict = {
     "config_dir": None,
     "sync_status": {},
     "current_mirror": None,
 }
-
-
-def format_size(size_bytes: int) -> str:
-    """Convert bytes to human readable size string."""
-    units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
-    size = float(size_bytes)
-    for unit in units:
-        if abs(size) < 1024.0:
-            return f"{size:.2f} {unit}" if unit != "B" else f"{int(size)} {unit}"
-        size /= 1024.0
-    return f"{size:.2f} EiB"
 
 
 class MirrorStatusResponse(BaseModel):
@@ -78,8 +73,6 @@ async def get_status() -> StatusResponse:
                 size_human=format_size(size_bytes),
             )
         )
-
-    from xync.daemon import get_pid_file, is_running
 
     pid_file = get_pid_file(cfg_dir)
     daemon_running = is_running(pid_file)
@@ -216,42 +209,3 @@ _API_PID_FILENAME = "xync-api.pid"
 def get_api_pid_file(config_dir: Path) -> Path:
     """Return the path to the API server PID file."""
     return config_dir / _API_PID_FILENAME
-
-
-def read_api_pid(pid_file: Path) -> Optional[int]:
-    """Read the API PID from *pid_file*; return ``None`` if missing or invalid."""
-    try:
-        return int(pid_file.read_text().strip())
-    except (FileNotFoundError, ValueError):
-        return None
-
-
-def is_api_running(pid_file: Path) -> bool:
-    """Return ``True`` if the API process recorded in *pid_file* is alive."""
-    pid = read_api_pid(pid_file)
-    if pid is None:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-
-
-def stop_api(pid_file: Path, force: bool = False) -> bool:
-    """Send SIGTERM (or SIGKILL with force=True) to the recorded API process.
-
-    Returns ``True`` if a signal was delivered, ``False`` if the process was
-    not found (stale PID file is cleaned up automatically).
-    """
-    pid = read_api_pid(pid_file)
-    if pid is None:
-        return False
-    try:
-        os.kill(pid, signal.SIGKILL if force else signal.SIGTERM)
-        return True
-    except ProcessLookupError:
-        pid_file.unlink(missing_ok=True)
-        return False

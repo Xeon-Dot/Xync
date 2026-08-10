@@ -7,30 +7,34 @@ import os
 import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Optional, Union, get_args, get_origin
 
 import typer
 from rich import print as rprint
 from rich.console import Console
 from rich.table import Table
 
-from xync.api import format_size
 from xync.config import get_config_dir, get_config_path, load_config, save_config
-from xync.discord import notify_disk_usage_warning as notify_discord_disk_warning
 from xync.discord import notify_sync_finish as notify_discord_finish
 from xync.discord import notify_sync_result as notify_discord
 from xync.discord import notify_sync_start as notify_discord_start
 from xync.discord import send_test_notification as send_discord_test
 from xync.models import GlobalConfig, Mirror, MirrorType, SyncStatus, xyncConfig
 from xync.sync import SyncResult, diff_mirror, purge_old_logs, sync_mirror
-from xync.telegram import notify_disk_usage_warning as notify_telegram_disk_warning
 from xync.telegram import notify_sync_finish as notify_telegram_finish
 from xync.telegram import notify_sync_result as notify_telegram
 from xync.telegram import notify_sync_start as notify_telegram_start
 from xync.telegram import send_test_notification as send_telegram_test
-from xync.utils import disk_usage_for_path, make_progress_callback
+from xync.utils import (
+    disk_usage_for_path,
+    format_size,
+    make_progress_callback,
+    record_sync_result,
+)
+from xync.utils import (
+    notify_disk_warning_if_needed as _notify_disk_warning_if_needed,
+)
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -88,37 +92,6 @@ ConfigDirOption = Annotated[
         show_default=False,
     ),
 ]
-
-_CONFIG_INT_KEYS = {
-    "max_log_files",
-    "parallel_jobs",
-    "daemon_interval",
-    "api_port",
-    "disk_usage_warning_percent",
-}
-_CONFIG_LIST_KEYS = {"default_rsync_options"}
-_CONFIG_STR_KEYS = {"log_dir", "daemon_schedule"}
-_CONFIG_BOOL_KEYS = {"api_enabled"}
-_CONFIG_NESTED_STR_KEYS = {
-    "telegram.bot_token": ("telegram", "bot_token"),
-    "telegram.chat_id": ("telegram", "chat_id"),
-    "discord.webhook_url": ("discord", "webhook_url"),
-}
-_CONFIG_NESTED_BOOL_KEYS = {
-    "telegram.notify_on_success": ("telegram", "notify_on_success"),
-    "telegram.notify_on_failure": ("telegram", "notify_on_failure"),
-    "telegram.notify_on_start": ("telegram", "notify_on_start"),
-    "telegram.notify_on_finish": ("telegram", "notify_on_finish"),
-    "telegram.notify_on_progress": ("telegram", "notify_on_progress"),
-    "discord.notify_on_success": ("discord", "notify_on_success"),
-    "discord.notify_on_failure": ("discord", "notify_on_failure"),
-    "discord.notify_on_start": ("discord", "notify_on_start"),
-    "discord.notify_on_finish": ("discord", "notify_on_finish"),
-    "discord.notify_on_progress": ("discord", "notify_on_progress"),
-}
-_CONFIG_TRUE_VALUES = {"true", "1", "yes"}
-_CONFIG_FALSE_VALUES = {"false", "0", "no"}
-
 
 # ---------------------------------------------------------------------------
 # xync init
@@ -466,13 +439,7 @@ def sync(
 
     # Process results sequentially to avoid config race conditions
     for mirror, result in completed:
-        mirror.last_sync = datetime.now(tz=timezone.utc)
-        mirror.last_status = result.status
-        if result.status == SyncStatus.SUCCESS and result.size_bytes is not None:
-            mirror.previous_size = mirror.last_size
-            mirror.last_size = result.size_bytes
-        cfg.mirrors[mirror.name] = mirror
-        save_config(cfg, config_dir)
+        record_sync_result(cfg, config_dir, mirror, result)
 
         notify_telegram_finish(
             cfg.global_config.telegram,
@@ -680,6 +647,24 @@ def health(
             "found on PATH" if shutil.which(tool) else "not found on PATH",
         )
 
+    tg = cfg.global_config.telegram
+    if tg.bot_token and not tg.chat_id:
+        add_row("telegram", "config", "warning", "bot_token set but chat_id missing")
+    elif tg.chat_id and not tg.bot_token:
+        add_row("telegram", "config", "warning", "chat_id set but bot_token missing")
+
+    dc = cfg.global_config.discord
+    if dc.webhook_url:
+        if not dc.webhook_url.startswith("https://"):
+            add_row("discord", "config", "error", "webhook_url must use HTTPS")
+        elif not dc.webhook_url.startswith("https://discord.com/api/webhooks/"):
+            add_row(
+                "discord",
+                "config",
+                "warning",
+                "webhook_url does not look like a Discord webhook URL",
+            )
+
     targets = (
         _resolve_sync_targets(cfg, names, skip_disabled=False)
         if cfg.mirrors or names
@@ -815,39 +800,45 @@ def config_set(
 
 
 def _set_global_config_value(gc: GlobalConfig, key: str, value: str) -> None:
-    if key in _CONFIG_INT_KEYS:
-        parsed_value = _parse_config_int(key, value)
-        if key == "disk_usage_warning_percent" and not 1 <= parsed_value <= 100:
+    if "." in key:
+        section, _, attr = key.partition(".")
+        target = getattr(gc, section, None)
+        if target is None or attr not in type(target).model_fields:
+            _unknown_config_key(key)
+        _set_config_field(target, attr, value)
+        return
+
+    if key not in GlobalConfig.model_fields:
+        _unknown_config_key(key)
+    _set_config_field(gc, key, value)
+
+
+def _set_config_field(obj, attr: str, value: str) -> None:
+    """Set a config field from a string, coercing by the field's declared type."""
+    annotation = type(obj).model_fields[attr].annotation
+    if annotation is int:
+        parsed = _parse_config_int(attr, value)
+        if attr == "disk_usage_warning_percent" and not 1 <= parsed <= 100:
             rprint(
                 "[red]Error:[/red] 'disk_usage_warning_percent' must be "
                 "between 1 and 100."
             )
             raise typer.Exit(1)
-        setattr(gc, key, parsed_value)
-        return
+        setattr(obj, attr, parsed)
+    elif annotation is bool:
+        setattr(obj, attr, _parse_config_bool(attr, value))
+    elif get_origin(annotation) is list:
+        setattr(obj, attr, value.split())
+    elif annotation is str:
+        setattr(obj, attr, value)
+    elif get_origin(annotation) is Union and type(None) in get_args(annotation):
+        setattr(obj, attr, value or None)
+    else:
+        # Nested model (telegram/discord) or unsupported type: not directly settable.
+        _unknown_config_key(attr)
 
-    if key in _CONFIG_LIST_KEYS:
-        setattr(gc, key, value.split())
-        return
 
-    if key in _CONFIG_STR_KEYS:
-        setattr(gc, key, value)
-        return
-
-    if key in _CONFIG_BOOL_KEYS:
-        setattr(gc, key, _parse_config_bool(key, value))
-        return
-
-    if key in _CONFIG_NESTED_STR_KEYS:
-        target_name, attr = _CONFIG_NESTED_STR_KEYS[key]
-        setattr(getattr(gc, target_name), attr, value or None)
-        return
-
-    if key in _CONFIG_NESTED_BOOL_KEYS:
-        target_name, attr = _CONFIG_NESTED_BOOL_KEYS[key]
-        setattr(getattr(gc, target_name), attr, _parse_config_bool(key, value))
-        return
-
+def _unknown_config_key(key: str) -> None:
     valid = ", ".join(_valid_config_keys())
     rprint(f"[red]Error:[/red] Unknown key '{key}'. Valid keys: {valid}")
     raise typer.Exit(1)
@@ -863,85 +854,21 @@ def _parse_config_int(key: str, value: str) -> int:
 
 def _parse_config_bool(key: str, value: str) -> bool:
     lowered = value.lower()
-    if lowered in _CONFIG_TRUE_VALUES:
+    if lowered in {"true", "1", "yes"}:
         return True
-    if lowered in _CONFIG_FALSE_VALUES:
+    if lowered in {"false", "0", "no"}:
         return False
     rprint(f"[red]Error:[/red] '{key}' requires a boolean value (true/false).")
     raise typer.Exit(1)
 
 
 def _valid_config_keys() -> list[str]:
-    return sorted(
-        _CONFIG_INT_KEYS
-        | _CONFIG_LIST_KEYS
-        | _CONFIG_STR_KEYS
-        | _CONFIG_BOOL_KEYS
-        | set(_CONFIG_NESTED_STR_KEYS)
-        | set(_CONFIG_NESTED_BOOL_KEYS)
-    )
-
-
-# ---------------------------------------------------------------------------
-# xync config validate
-# ---------------------------------------------------------------------------
-
-
-@config_app.command("validate")
-def config_validate(
-    config_dir: ConfigDirOption = None,
-) -> None:
-    """Validate the current configuration and report issues."""
-    cfg = load_config(config_dir)
-    errors: list[str] = []
-    warnings: list[str] = []
-
-    if not shutil.which("rsync"):
-        warnings.append("rsync not found on PATH")
-    if not shutil.which("wget"):
-        warnings.append("wget not found on PATH")
-
-    for name, mirror in cfg.mirrors.items():
-        if mirror.mirror_type == MirrorType.RSYNC and not shutil.which("rsync"):
-            errors.append(f"[{name}] rsync mirror but rsync not installed")
-        if mirror.mirror_type in (MirrorType.HTTP, MirrorType.FTP) and not shutil.which(
-            "wget"
-        ):
-            errors.append(f"[{name}] http/ftp mirror but wget not installed")
-        parent = Path(mirror.local_path).parent
-        if not parent.exists():
-            errors.append(f"[{name}] parent directory does not exist: {parent}")
-        elif not os.access(parent, os.W_OK):
-            errors.append(f"[{name}] parent directory not writable: {parent}")
-
-    tg = cfg.global_config.telegram
-    if tg.bot_token and not tg.chat_id:
-        warnings.append("telegram.bot_token set but chat_id missing")
-    if tg.chat_id and not tg.bot_token:
-        warnings.append("telegram.chat_id set but bot_token missing")
-
-    dc = cfg.global_config.discord
-    if dc.webhook_url:
-        if not dc.webhook_url.startswith("https://"):
-            errors.append("discord.webhook_url must use HTTPS")
-        elif not dc.webhook_url.startswith("https://discord.com/api/webhooks/"):
-            warnings.append(
-                "discord.webhook_url does not look like a Discord webhook URL"
-            )
-
-    if errors:
-        rprint(f"[red]{len(errors)} error(s) found:[/red]")
-        for e in errors:
-            rprint(f"  [red]✗[/red] {e}")
-    if warnings:
-        rprint(f"[yellow]{len(warnings)} warning(s) found:[/yellow]")
-        for w in warnings:
-            rprint(f"  [yellow]![/yellow] {w}")
-    if not errors and not warnings:
-        rprint("[green]✓ Configuration is valid.[/green]")
-
-    if errors:
-        raise typer.Exit(1)
+    nested = ("telegram", "discord")
+    keys = set(GlobalConfig.model_fields) - set(nested)
+    for section in nested:
+        sub_model = GlobalConfig.model_fields[section].annotation
+        keys |= {f"{section}.{name}" for name in sub_model.model_fields}
+    return sorted(keys)
 
 
 # ---------------------------------------------------------------------------
@@ -1347,30 +1274,6 @@ def _expected_scheme_status(mirror: Mirror) -> Optional[str]:
     if mirror.mirror_type == MirrorType.FTP and not mirror.url.startswith("ftp://"):
         return "ftp mirrors should use ftp:// URLs"
     return None
-
-
-def _notify_disk_warning_if_needed(cfg: xyncConfig, mirror: Mirror) -> None:
-    usage = disk_usage_for_path(mirror.local_path)
-    if usage is None:
-        return
-    usage_percent, usage_path = usage
-    threshold = cfg.global_config.disk_usage_warning_percent
-    if usage_percent < threshold:
-        return
-    notify_telegram_disk_warning(
-        cfg.global_config.telegram,
-        mirror.name,
-        usage_percent,
-        threshold,
-        str(usage_path),
-    )
-    notify_discord_disk_warning(
-        cfg.global_config.discord,
-        mirror.name,
-        usage_percent,
-        threshold,
-        str(usage_path),
-    )
 
 
 def _status_style(status: SyncStatus) -> str:

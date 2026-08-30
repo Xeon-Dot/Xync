@@ -5,7 +5,7 @@ Linux 미러 저장소를 동기화하고 관리하는 CLI 도구입니다.
 `xync`는 `rsync`, `wget` 기반 미러링을 설정 파일로 관리하고, 상태 확인·로그 조회·데몬 실행·REST API·Telegram/Discord 알림까지 제공합니다.
 
 > [!NOTE]
-> Built with Python · [uv](https://docs.astral.sh/uv/) · [Typer](https://typer.tiangolo.com/) · [Rich](https://rich.readthedocs.io/) · [FastAPI](https://fastapi.tiangolo.com/)
+> Built with Python · [uv](https://docs.astral.sh/uv/) · [Typer](https://typer.tiangolo.com/) · [Rich](https://rich.readthedocs.io/)
 
 ---
 

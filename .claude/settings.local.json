@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(python -m pytest tests/test_sync.py::TestAcquireLock -v)",
-      "Bash(python -m pytest tests/ -v)"
-    ]
-  }
-}

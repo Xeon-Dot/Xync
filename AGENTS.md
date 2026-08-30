@@ -1,6 +1,6 @@
 # AGENTS.md — xync
 
-Linux mirror sync/management CLI. Python (Typer + Rich + FastAPI), packaged with `uv` and `hatchling`, published to PyPI. Also ships a PyInstaller standalone binary.
+Linux mirror sync/management CLI. Python (Typer + Rich), packaged with `uv` and `hatchling`, published to PyPI. Also ships a PyInstaller standalone binary.
 
 ## Layout
 
@@ -8,12 +8,12 @@ Linux mirror sync/management CLI. Python (Typer + Rich + FastAPI), packaged with
   - `main.py` — all `@app.command()` definitions (init, mirror *, sync, status, log, health, config *, daemon *, notify, api *).
   - `config.py` — TOML config load/save, default config dir resolution.
   - `models.py` — Pydantic models; `xyncConfig.version: int = 1` is the config schema version.
-  - `sync.py` — `sync_mirror`, `diff_mirror`, `purge_old_logs`, `SyncResult`.
+  - `sync.py` — `sync_mirror`, `run_sync_batch`, `diff_mirror`, `purge_old_logs`, `SyncResult`.
   - `daemon.py` — background scheduler (interval or cron), PID/log files in config dir.
-  - `api.py` — FastAPI/uvicorn server (`/api/status`, `/api/mirrors`, `/api/mirrors/{name}`, `/api/mirrors/{name}/size`).
-  - `telegram.py`, `discord.py` — notifiers.
-  - `utils.py` — disk usage, progress callbacks.
-- `tests/` — pytest suite. `__init__.py` present. Test files: `test_cli.py`, `test_config.py`, `test_models.py`, `test_sync.py`, `test_discord.py`, `test_telegram.py`.
+  - `api.py` — stdlib `http.server` JSON API (`/api/status`, `/api/mirrors`, `/api/mirrors/{name}`, `/api/mirrors/{name}/size`).
+  - `notify.py` — notification dispatch: per-event gateways for Telegram/Discord, transport (`post_json`), message text.
+  - `utils.py` — disk usage, sync result recording.
+- `tests/` — pytest suite. `__init__.py` present. Test files: `test_cli.py`, `test_config.py`, `test_models.py`, `test_sync.py`, `test_notify.py`.
 - `xync.spec` — PyInstaller spec for standalone binary (`./dist/xync`).
 - `scripts/test-executable.sh` — smoke-tests the PyInstaller binary (version, help, init, config show, mirror list in a temp dir).
 - `.github/workflows/pypi.yml` — CI: test + build on PR/push to `main`; publish to PyPI on GitHub release.
@@ -63,10 +63,10 @@ The CLI shells out to `rsync` and `wget`; they must be on `PATH` for `sync`/`dif
 
 ## Things easy to miss
 
-- **PyInstaller hidden imports**: `xync.spec` explicitly lists uvicorn submodules (`uvicorn.logging`, `uvicorn.loops.auto`, `uvicorn.protocols.*`, `uvicorn.lifespan.on`). If you add an uvicorn plugin/extension, add it here or the binary will fail at runtime. (Also note `strip=True, upx=True` on the EXE.)
+- **PyInstaller hidden imports**: if you build a standalone binary and add third-party packages with dynamic imports, list their hidden imports in the spec or the binary will fail at runtime. Stdlib `http.server` needs none. (Also note `strip=True, upx=True` on the EXE.)
 - **Mirror name validation** lives in `models.py` and is enforced both at CLI and in config loading — re-use the validator, don't roll a new regex.
 - **`mirror diff` is rsync-only** (uses `rsync --dry-run --itemize-changes`). HTTP/FTP mirrors will error — preserve this restriction.
-- **Notifications** import re-exports in `main.py` (e.g. `notify_sync_result as notify_telegram` from `xync.telegram`). Keep that pattern when adding new notifier events; the rename avoids clashes between telegram/discord.
+- **Notifications** are dispatched from `xync.notify`: one function per event (`notify_sync_start`, `notify_sync_result`, `notify_sync_progress`, `notify_disk_warning`) taking `GlobalConfig` and fanning out to both channels; channel senders are private `_send_telegram`/`_send_discord`. Add new events as dispatchers there — the CLI and daemon both call them via `sync.run_sync_batch` and send at most one message per channel per event.
 - **Daemon PID + log files** live inside the config dir — if a test sets a custom `--config-dir` it must use `tmp_path` or `mkdtemp`, not the user's real config.
 - The CLI default config dir is per-user; tests that mutate config must isolate `--config-dir`.
 - The PyInstaller `EXE` strips symbols and runs UPX — debug builds need `strip=False, upx=False`.

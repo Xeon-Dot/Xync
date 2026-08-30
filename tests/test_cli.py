@@ -348,7 +348,7 @@ class TestSync:
         result = runner.invoke(app, ["sync", "nonexistent"] + make_cfg_opt(tmp_path))
         assert result.exit_code != 0
 
-    def test_sends_finish_notifications_before_result_notifications(
+    def test_sends_start_before_result_notifications(
         self, tmp_path, mocker
     ):
         runner.invoke(
@@ -364,35 +364,24 @@ class TestSync:
         )
         calls = []
         mocker.patch(
-            "xync.main.sync_mirror",
+            "xync.sync.sync_mirror",
             return_value=SyncResult("ubuntu", SyncStatus.SUCCESS, 1.0),
         )
-        mocker.patch("xync.main.notify_telegram_start")
-        mocker.patch("xync.main.notify_discord_start")
         mocker.patch(
-            "xync.main.notify_telegram_finish",
-            lambda *args: calls.append("telegram_finish"),
+            "xync.notify.notify_sync_start",
+            lambda *args: calls.append("start"),
         )
         mocker.patch(
-            "xync.main.notify_discord_finish",
-            lambda *args: calls.append("discord_finish"),
+            "xync.notify.notify_sync_result",
+            lambda *args: calls.append("result"),
         )
-        mocker.patch(
-            "xync.main.notify_telegram",
-            lambda *args: calls.append("telegram_result"),
-        )
-        mocker.patch(
-            "xync.main.notify_discord",
-            lambda *args: calls.append("discord_result"),
-        )
-        mocker.patch("xync.main._notify_disk_warning_if_needed")
-        mocker.patch("xync.main.purge_old_logs")
+        mocker.patch("xync.notify.notify_disk_warning")
+        mocker.patch("xync.sync.purge_old_logs")
 
         result = runner.invoke(app, ["sync", "ubuntu"] + make_cfg_opt(tmp_path))
 
         assert result.exit_code == 0, result.output
-        assert calls.index("telegram_finish") < calls.index("telegram_result")
-        assert calls.index("discord_finish") < calls.index("discord_result")
+        assert calls == ["start", "result"]
 
 
 class TestHealth:
@@ -433,7 +422,9 @@ class TestNotifyCommands:
             app,
             ["config", "set", "telegram.chat_id", "chat456"] + make_cfg_opt(tmp_path),
         )
-        mock_send = mocker.patch("xync.main.send_telegram_test", return_value=True)
+        mock_send = mocker.patch(
+            "xync.main.send_test_notification", return_value=True
+        )
 
         result = runner.invoke(
             app, ["notify", "test", "telegram"] + make_cfg_opt(tmp_path)
@@ -530,7 +521,7 @@ class TestDaemonCommands:
         assert "SIGKILL" in result.output
         mock_stop.assert_called_once_with(mocker.ANY, True)
 
-    def test_daemon_sends_finish_notifications_before_result_notifications(
+    def test_daemon_sends_start_before_result_notifications(
         self, tmp_path, mocker
     ):
         from xync.config import load_config, save_config
@@ -555,28 +546,17 @@ class TestDaemonCommands:
             "xync.sync.sync_mirror",
             return_value=SyncResult("ubuntu", SyncStatus.SUCCESS, 1.0),
         )
-        mocker.patch("xync.telegram.notify_sync_start")
-        mocker.patch("xync.discord.notify_sync_start")
         mocker.patch(
-            "xync.telegram.notify_sync_finish",
-            lambda *args: calls.append("telegram_finish"),
+            "xync.notify.notify_sync_start",
+            lambda *args: calls.append("start"),
         )
         mocker.patch(
-            "xync.discord.notify_sync_finish",
-            lambda *args: calls.append("discord_finish"),
+            "xync.notify.notify_sync_result",
+            lambda *args: calls.append("result"),
         )
-        mocker.patch(
-            "xync.telegram.notify_sync_result",
-            lambda *args: calls.append("telegram_result"),
-        )
-        mocker.patch(
-            "xync.discord.notify_sync_result",
-            lambda *args: calls.append("discord_result"),
-        )
-        mocker.patch("xync.utils.disk_usage_for_path", return_value=None)
+        mocker.patch("xync.notify.disk_usage_for_path", return_value=None)
         mocker.patch("xync.sync.purge_old_logs")
 
         run_daemon_loop(tmp_path, ["ubuntu"], interval=1)
 
-        assert calls.index("telegram_finish") < calls.index("telegram_result")
-        assert calls.index("discord_finish") < calls.index("discord_result")
+        assert calls == ["start", "result"]

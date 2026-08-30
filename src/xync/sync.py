@@ -2,18 +2,26 @@
 
 from __future__ import annotations
 
-import fcntl
 import os
 import re
 import shutil
 import subprocess
+
+try:
+    import fcntl
+except ImportError:  # non-POSIX (e.g. Windows): advisory locking unavailable
+    fcntl = None  # type: ignore[assignment]
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
-from xync.models import Mirror, MirrorType, SyncStatus
-from xync.utils import get_directory_size
+from xync import notify
+from xync.config import load_config
+from xync.models import Mirror, MirrorType, SyncStatus, xyncConfig
+from xync.utils import get_directory_size, record_sync_result
 
 # Matches rsync --info=progress2 lines: "to-chk=<remaining>/<total>"
 _RSYNC_TOCHK_RE = re.compile(r"to-chk=(\d+)/(\d+)")
@@ -51,9 +59,13 @@ def acquire_lock(lock_path: Path) -> bool:
 
     Returns *True* if the lock was acquired, *False* if it is already held.
     ``flock`` is released automatically by the kernel if the holding process
-    exits or crashes, so no stale-lock detection is required.
+    exits or crashes, so no stale-lock detection is required.  On non-POSIX
+    platforms without ``fcntl`` this always succeeds (no locking).
     """
     lock_path.parent.mkdir(parents=True, exist_ok=True)
+    if fcntl is None:
+        lock_path.touch(exist_ok=True)
+        return True
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -66,6 +78,8 @@ def acquire_lock(lock_path: Path) -> bool:
 
 def release_lock(lock_path: Path) -> None:
     """Release a lock acquired by :func:`acquire_lock`."""
+    if fcntl is None:
+        return
     fd = _held_locks.pop(str(lock_path), None)
     if fd is None:
         return
@@ -200,6 +214,84 @@ def sync_mirror(
         )
     finally:
         release_lock(lock_path)
+
+
+# ---------------------------------------------------------------------------
+# Batch runner (shared by the CLI and the daemon loop)
+# ---------------------------------------------------------------------------
+
+
+def run_sync_batch(
+    cfg: xyncConfig,
+    config_dir: Optional[Path],
+    log_dir_base: Path,
+    targets: list[Mirror],
+    verbose: bool = False,
+    should_stop: Optional[Callable[[], bool]] = None,
+    report: Optional[Callable[[Mirror, SyncResult], None]] = None,
+) -> bool:
+    """Sync all *targets*, fire notifications and record results.
+
+    Args:
+        cfg: Loaded configuration (used for parallelism and notify flags).
+        config_dir: Configuration directory, for reloading before each save.
+        log_dir_base: Base directory for per-mirror sync logs.
+        targets: Mirrors to sync.
+        verbose: If *True*, print subprocess output to console.
+        should_stop: Polled between sequential syncs; abort the batch when True.
+        report: Optional callback for each finished ``(mirror, result)`` pair.
+
+    Returns:
+        ``True`` when at least one mirror failed.
+    """
+    gc = cfg.global_config
+
+    for mirror in targets:
+        notify.notify_sync_start(gc, mirror.name)
+
+    def _sync_one(mirror: Mirror) -> tuple[Mirror, SyncResult]:
+        log_dir = log_dir_base / mirror.name
+        on_progress = None
+        if gc.telegram.notify_on_progress or gc.discord.notify_on_progress:
+            on_progress = notify.make_progress_callback(gc, mirror.name)
+        result = sync_mirror(mirror, log_dir, verbose=verbose, on_progress=on_progress)
+        return mirror, result
+
+    completed: list[tuple[Mirror, SyncResult]] = []
+    if gc.parallel_jobs > 1 and len(targets) > 1:
+        with ThreadPoolExecutor(max_workers=gc.parallel_jobs) as executor:
+            futures = [executor.submit(_sync_one, m) for m in targets]
+            for future in as_completed(futures):
+                completed.append(future.result())
+    else:
+        for mirror in targets:
+            if should_stop and should_stop():
+                break
+            completed.append(_sync_one(mirror))
+
+    any_failure = False
+    for mirror, result in completed:
+        # Reload config before saving to avoid clobbering concurrent edits.
+        fresh = load_config(config_dir)
+        record_sync_result(fresh, config_dir, mirror, result)
+        notify.notify_sync_result(
+            fresh.global_config,
+            mirror.name,
+            result.status,
+            result.duration_seconds,
+            result.error,
+        )
+        notify.notify_disk_warning(fresh.global_config, mirror)
+        purge_old_logs(
+            log_dir_base / mirror.name,
+            mirror.name,
+            fresh.global_config.max_log_files,
+        )
+        if report:
+            report(mirror, result)
+        if result.error:
+            any_failure = True
+    return any_failure
 
 
 # ---------------------------------------------------------------------------

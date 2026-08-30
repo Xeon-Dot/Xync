@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Annotated, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, BeforeValidator, Field, field_validator
 
 
 class MirrorType(str, Enum):
@@ -78,49 +78,44 @@ class Mirror(BaseModel):
         return v
 
 
-class TelegramConfig(BaseModel):
+Credential = Annotated[
+    Optional[str], BeforeValidator(lambda v: v or None)
+]
+
+
+class NotificationConfig(BaseModel):
+    """Shared notification-channel settings."""
+
+    notify_on_success: bool = Field(
+        True, description="Send notification on successful sync"
+    )
+    notify_on_failure: bool = Field(
+        True, description="Send notification on failed sync"
+    )
+    notify_on_start: bool = Field(
+        False, description="Send notification when sync starts"
+    )
+    notify_on_finish: bool = Field(
+        False, description="Send notification when sync finishes (regardless of result)"
+    )
+    notify_on_progress: bool = Field(
+        False, description="Send notification at every 10% sync progress (rsync only)"
+    )
+
+
+class TelegramConfig(NotificationConfig):
     """Telegram notification configuration."""
 
-    bot_token: Optional[str] = Field(None, description="Telegram Bot API token")
-    chat_id: Optional[str] = Field(
+    bot_token: Credential = Field(None, description="Telegram Bot API token")
+    chat_id: Credential = Field(
         None, description="Telegram chat ID to send notifications to"
     )
-    notify_on_success: bool = Field(
-        True, description="Send notification on successful sync"
-    )
-    notify_on_failure: bool = Field(
-        True, description="Send notification on failed sync"
-    )
-    notify_on_start: bool = Field(
-        False, description="Send notification when sync starts"
-    )
-    notify_on_finish: bool = Field(
-        False, description="Send notification when sync finishes (regardless of result)"
-    )
-    notify_on_progress: bool = Field(
-        False, description="Send notification at every 10% sync progress (rsync only)"
-    )
 
 
-class DiscordConfig(BaseModel):
+class DiscordConfig(NotificationConfig):
     """Discord webhook notification configuration."""
 
-    webhook_url: Optional[str] = Field(None, description="Discord webhook URL")
-    notify_on_success: bool = Field(
-        True, description="Send notification on successful sync"
-    )
-    notify_on_failure: bool = Field(
-        True, description="Send notification on failed sync"
-    )
-    notify_on_start: bool = Field(
-        False, description="Send notification when sync starts"
-    )
-    notify_on_finish: bool = Field(
-        False, description="Send notification when sync finishes (regardless of result)"
-    )
-    notify_on_progress: bool = Field(
-        False, description="Send notification at every 10% sync progress (rsync only)"
-    )
+    webhook_url: Credential = Field(None, description="Discord webhook URL")
 
 
 class GlobalConfig(BaseModel):

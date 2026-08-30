@@ -1,4 +1,4 @@
-"""Shared notification helpers: JSON POST transport and message text."""
+"""Notification dispatch for xync: transport, message text, and channel gateways."""
 
 from __future__ import annotations
 
@@ -6,10 +6,14 @@ import json
 import logging
 import urllib.error
 import urllib.request
+from typing import Callable, Optional
 
-from xync.models import SyncStatus
+from xync.models import DiscordConfig, GlobalConfig, Mirror, SyncStatus, TelegramConfig
+from xync.utils import disk_usage_for_path
 
 logger = logging.getLogger(__name__)
+
+_TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 
 
 def post_json(url: str, payload: dict, timeout: float = 10) -> bool:
@@ -40,27 +44,11 @@ def progress_text(mirror_name: str, progress_pct: int) -> str:
     return f"📊 xync: [{mirror_name}] progress {progress_pct}%"
 
 
-def finish_text(
-    mirror_name: str,
-    status: SyncStatus,
-    duration_seconds: float,
-    error: str | None = None,
-) -> str:
-    text = (
-        f"{_status_emoji(status)} xync: [{mirror_name}] "
-        f"SYNC FINISHED ({status.value.upper()})\n"
-        f"Duration: {duration_seconds:.1f}s"
-    )
-    if error:
-        text += f"\nError: {error}"
-    return text
-
-
 def result_text(
     mirror_name: str,
     status: SyncStatus,
     duration_seconds: float,
-    error: str | None = None,
+    error: Optional[str] = None,
 ) -> str:
     text = (
         f"{_status_emoji(status)} xync: [{mirror_name}] {status.value.upper()}\n"
@@ -83,3 +71,108 @@ def disk_text(
         f"(threshold: {threshold_percent}%)\n"
         f"Path: {path}"
     )
+
+
+def _send_telegram(cfg: TelegramConfig, text: str) -> bool:
+    """Send *text* via the Telegram Bot API; no-op (False) when unconfigured."""
+    if not (cfg.bot_token and cfg.chat_id):
+        return False
+    url = _TELEGRAM_API_URL.format(token=cfg.bot_token)
+    return post_json(url, {"chat_id": cfg.chat_id, "text": text})
+
+
+def _send_discord(cfg: DiscordConfig, text: str) -> bool:
+    """Send *text* via a Discord webhook; no-op (False) when unconfigured."""
+    if not cfg.webhook_url:
+        return False
+    return post_json(cfg.webhook_url, {"content": text})
+
+
+def _wants_result(cfg, status: SyncStatus) -> bool:
+    """Gate for result notifications: on_finish forces a send."""
+    if status == SyncStatus.SUCCESS:
+        return cfg.notify_on_success or cfg.notify_on_finish
+    if status == SyncStatus.FAILED:
+        return cfg.notify_on_failure or cfg.notify_on_finish
+    return cfg.notify_on_finish
+
+
+def notify_sync_start(global_config: GlobalConfig, mirror_name: str) -> None:
+    """Notify every configured channel that a sync started."""
+    tg, dc = global_config.telegram, global_config.discord
+    if tg.notify_on_start:
+        _send_telegram(tg, start_text(mirror_name))
+    if dc.notify_on_start:
+        _send_discord(dc, start_text(mirror_name))
+
+
+def notify_sync_result(
+    global_config: GlobalConfig,
+    mirror_name: str,
+    status: SyncStatus,
+    duration_seconds: float,
+    error: Optional[str] = None,
+) -> None:
+    """Notify every configured channel of a sync result (one message max)."""
+    tg, dc = global_config.telegram, global_config.discord
+    if not _wants_result(tg, status) and not _wants_result(dc, status):
+        return
+    text = result_text(mirror_name, status, duration_seconds, error)
+    if _wants_result(tg, status):
+        _send_telegram(tg, text)
+    if _wants_result(dc, status):
+        _send_discord(dc, text)
+
+
+def notify_sync_progress(
+    global_config: GlobalConfig,
+    mirror_name: str,
+    progress_pct: int,
+) -> None:
+    """Notify every configured channel of a progress milestone."""
+    tg, dc = global_config.telegram, global_config.discord
+    if tg.notify_on_progress:
+        _send_telegram(tg, progress_text(mirror_name, progress_pct))
+    if dc.notify_on_progress:
+        _send_discord(dc, progress_text(mirror_name, progress_pct))
+
+
+def notify_disk_warning(global_config: GlobalConfig, mirror: Mirror) -> None:
+    """Warn every configured channel when the mirror filesystem is above threshold."""
+    usage = disk_usage_for_path(mirror.local_path)
+    if usage is None:
+        return
+    usage_percent, usage_path = usage
+    threshold = global_config.disk_usage_warning_percent
+    if usage_percent < threshold:
+        return
+    tg, dc = global_config.telegram, global_config.discord
+    if not (tg.notify_on_failure or dc.notify_on_failure):
+        return
+    text = disk_text(mirror.name, usage_percent, threshold, str(usage_path))
+    if tg.notify_on_failure:
+        _send_telegram(tg, text)
+    if dc.notify_on_failure:
+        _send_discord(dc, text)
+
+
+def make_progress_callback(
+    global_config: GlobalConfig,
+    mirror_name: str,
+) -> Callable[[int], None]:
+    """Return a callback forwarding each progress percentage to the channels."""
+
+    def _cb(pct: int) -> None:
+        notify_sync_progress(global_config, mirror_name, pct)
+
+    return _cb
+
+
+def send_test_notification(global_config: GlobalConfig, channel: str) -> bool:
+    """Send a test message through *channel* (``telegram`` or ``discord``)."""
+    text = "✅ xync test notification"
+    if channel == "telegram":
+        return _send_telegram(global_config.telegram, text)
+    if channel == "discord":
+        return _send_discord(global_config.discord, text)
+    return False

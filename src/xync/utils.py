@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 from xync.config import save_config
 from xync.models import SyncStatus
@@ -63,51 +63,3 @@ def record_sync_result(cfg, config_dir, mirror, result) -> None:
         mirror.last_size = result.size_bytes
     cfg.mirrors[mirror.name] = mirror
     save_config(cfg, config_dir)
-
-
-def notify_disk_warning_if_needed(cfg, mirror) -> None:
-    """Send Telegram/Discord disk-usage warnings if the mirror filesystem is full."""
-    from xync.discord import notify_disk_usage_warning as _discord_disk
-    from xync.telegram import notify_disk_usage_warning as _telegram_disk
-
-    usage = disk_usage_for_path(mirror.local_path)
-    if usage is None:
-        return
-    usage_percent, usage_path = usage
-    threshold = cfg.global_config.disk_usage_warning_percent
-    if usage_percent < threshold:
-        return
-    _telegram_disk(
-        cfg.global_config.telegram,
-        mirror.name,
-        usage_percent,
-        threshold,
-        str(usage_path),
-    )
-    _discord_disk(
-        cfg.global_config.discord,
-        mirror.name,
-        usage_percent,
-        threshold,
-        str(usage_path),
-    )
-
-
-def make_progress_callback(
-    telegram_cfg,
-    discord_cfg,
-    name: str,
-) -> Callable[[int], None]:
-    """Return a progress callback that fires Telegram/Discord progress notifications.
-
-    The caller (``xync.sync._run_with_progress``) already deduplicates milestones,
-    so this callback simply forwards each percentage it is given.
-    """
-    from xync.discord import notify_sync_progress as _discord_progress
-    from xync.telegram import notify_sync_progress as _telegram_progress
-
-    def _cb(pct: int) -> None:
-        _telegram_progress(telegram_cfg, name, pct)
-        _discord_progress(discord_cfg, name, pct)
-
-    return _cb

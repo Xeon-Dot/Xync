@@ -1,5 +1,6 @@
 """Tests for xync.sync."""
 
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -223,6 +224,9 @@ class TestAcquireLock:
         assert lock_path.exists()
         release_lock(lock_path)
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="flock is POSIX-only"
+    )
     def test_fails_when_lock_held_by_running_process(self, tmp_path):
         import fcntl
         import os

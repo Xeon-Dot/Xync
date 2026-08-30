@@ -6,7 +6,6 @@ import logging
 import os
 import shutil
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Annotated, Optional, Union, get_args, get_origin
 
@@ -16,25 +15,10 @@ from rich.console import Console
 from rich.table import Table
 
 from xync.config import get_config_dir, get_config_path, load_config, save_config
-from xync.discord import notify_sync_finish as notify_discord_finish
-from xync.discord import notify_sync_result as notify_discord
-from xync.discord import notify_sync_start as notify_discord_start
-from xync.discord import send_test_notification as send_discord_test
 from xync.models import GlobalConfig, Mirror, MirrorType, SyncStatus, xyncConfig
-from xync.sync import SyncResult, diff_mirror, purge_old_logs, sync_mirror
-from xync.telegram import notify_sync_finish as notify_telegram_finish
-from xync.telegram import notify_sync_result as notify_telegram
-from xync.telegram import notify_sync_start as notify_telegram_start
-from xync.telegram import send_test_notification as send_telegram_test
-from xync.utils import (
-    disk_usage_for_path,
-    format_size,
-    make_progress_callback,
-    record_sync_result,
-)
-from xync.utils import (
-    notify_disk_warning_if_needed as _notify_disk_warning_if_needed,
-)
+from xync.notify import send_test_notification
+from xync.sync import SyncResult, diff_mirror, run_sync_batch
+from xync.utils import disk_usage_for_path, format_size
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -402,78 +386,7 @@ def sync(
             raise typer.Exit(1)
         return
 
-    def _sync_one(mirror: Mirror) -> tuple[Mirror, SyncResult]:
-        log_dir = log_dir_base / mirror.name
-        on_progress = None
-        if (
-            cfg.global_config.telegram.notify_on_progress
-            or cfg.global_config.discord.notify_on_progress
-        ):
-            on_progress = make_progress_callback(
-                cfg.global_config.telegram,
-                cfg.global_config.discord,
-                mirror.name,
-            )
-        result = sync_mirror(mirror, log_dir, verbose=verbose, on_progress=on_progress)
-        return mirror, result
-
-    for mirror in targets:
-        notify_telegram_start(cfg.global_config.telegram, mirror.name)
-        notify_discord_start(cfg.global_config.discord, mirror.name)
-
-    any_failure = False
-    completed = []
-
-    if cfg.global_config.parallel_jobs > 1 and len(targets) > 1:
-        with ThreadPoolExecutor(
-            max_workers=cfg.global_config.parallel_jobs
-        ) as executor:
-            futures = [executor.submit(_sync_one, m) for m in targets]
-            for future in as_completed(futures):
-                mirror, result = future.result()
-                completed.append((mirror, result))
-    else:
-        for mirror in targets:
-            mirror, result = _sync_one(mirror)
-            completed.append((mirror, result))
-
-    # Process results sequentially to avoid config race conditions
-    for mirror, result in completed:
-        record_sync_result(cfg, config_dir, mirror, result)
-
-        notify_telegram_finish(
-            cfg.global_config.telegram,
-            mirror.name,
-            result.status,
-            result.duration_seconds,
-            result.error,
-        )
-        notify_discord_finish(
-            cfg.global_config.discord,
-            mirror.name,
-            result.status,
-            result.duration_seconds,
-            result.error,
-        )
-        notify_telegram(
-            cfg.global_config.telegram,
-            mirror.name,
-            result.status,
-            result.duration_seconds,
-            result.error,
-        )
-        notify_discord(
-            cfg.global_config.discord,
-            mirror.name,
-            result.status,
-            result.duration_seconds,
-            result.error,
-        )
-        _notify_disk_warning_if_needed(cfg, mirror)
-
-        log_dir = log_dir_base / mirror.name
-        purge_old_logs(log_dir, mirror.name, cfg.global_config.max_log_files)
-
+    def _report(mirror: Mirror, result: SyncResult) -> None:
         style = _status_style(result.status)
         rprint(
             f"\n[bold cyan]Syncing[/bold cyan] "
@@ -486,9 +399,10 @@ def sync(
         )
         if result.error:
             rprint(f"  [red]Error:[/red] {result.error}")
-            any_failure = True
 
-    if any_failure:
+    if run_sync_batch(
+        cfg, config_dir, log_dir_base, targets, verbose=verbose, report=_report
+    ):
         raise typer.Exit(1)
 
 
@@ -1204,10 +1118,9 @@ def notify_test(
         raise typer.Exit(1)
 
     results: list[tuple[str, bool]] = []
-    if channel in {"telegram", "all"}:
-        results.append(("telegram", send_telegram_test(cfg.global_config.telegram)))
-    if channel in {"discord", "all"}:
-        results.append(("discord", send_discord_test(cfg.global_config.discord)))
+    channels = ["telegram", "discord"] if channel == "all" else [channel]
+    for ch in channels:
+        results.append((ch, send_test_notification(cfg.global_config, ch)))
 
     failed = False
     for name, ok in results:
@@ -1300,17 +1213,13 @@ def api_start(
     config_dir: ConfigDirOption = None,
 ) -> None:
     """Start the API server."""
-    from xync.api import (
-        get_api_pid_file,
-        init_api_state,
-        is_api_running,
-        run_api_server,
-    )
+    from xync.api import get_api_pid_file, init_api_state, run_api_server
+    from xync.daemon import is_running
 
     cfg_dir = get_config_dir(config_dir)
     pid_file = get_api_pid_file(cfg_dir)
 
-    if is_api_running(pid_file):
+    if is_running(pid_file):
         rprint("[yellow]API server is already running.[/yellow]")
         raise typer.Exit(1)
 
@@ -1332,22 +1241,18 @@ def api_stop(
     ),
 ) -> None:
     """Stop a running API server process."""
-    from xync.api import (
-        get_api_pid_file,
-        is_api_running,
-        read_api_pid,
-        stop_api,
-    )
+    from xync.api import get_api_pid_file
+    from xync.daemon import is_running, read_pid, stop_daemon
 
     cfg_dir = get_config_dir(config_dir)
     pid_file = get_api_pid_file(cfg_dir)
 
-    if not is_api_running(pid_file):
+    if not is_running(pid_file):
         rprint("[yellow]API server is not running.[/yellow]")
         return
 
-    pid = read_api_pid(pid_file)
-    if stop_api(pid_file, force):
+    pid = read_pid(pid_file)
+    if stop_daemon(pid_file, force):
         sig = "SIGKILL" if force else "SIGTERM"
         rprint(f"[green]Sent {sig} to API server (PID {pid}).[/green]")
     else:
@@ -1360,17 +1265,14 @@ def api_status(
     config_dir: ConfigDirOption = None,
 ) -> None:
     """Show whether the API server is running."""
-    from xync.api import (
-        get_api_pid_file,
-        is_api_running,
-        read_api_pid,
-    )
+    from xync.api import get_api_pid_file
+    from xync.daemon import is_running, read_pid
 
     cfg_dir = get_config_dir(config_dir)
     pid_file = get_api_pid_file(cfg_dir)
 
-    if is_api_running(pid_file):
-        pid = read_api_pid(pid_file)
+    if is_running(pid_file):
+        pid = read_pid(pid_file)
         cfg = load_config(config_dir)
         port = cfg.global_config.api_port
         rprint(f"[green]API server is running[/green] (PID {pid}, port {port})")

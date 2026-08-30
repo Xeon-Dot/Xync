@@ -7,11 +7,13 @@ import os
 import signal
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from types import FrameType
 from typing import Optional
+
+from xync.config import get_config_dir, load_config
+from xync.sync import run_sync_batch
 
 logger = logging.getLogger(__name__)
 
@@ -164,26 +166,8 @@ def run_daemon_loop(
         api_enabled: If True, start the API server in a background thread.
         api_port: Port for the API server.
     """
-    # Late imports to avoid circular dependencies at module load time.
-    from xync.config import get_config_dir, load_config  # noqa: PLC0415
-    from xync.discord import (
-        notify_sync_finish as notify_discord_finish,  # noqa: PLC0415
-    )
-    from xync.discord import notify_sync_result as notify_discord  # noqa: PLC0415
-    from xync.discord import notify_sync_start as notify_discord_start  # noqa: PLC0415
-    from xync.sync import purge_old_logs, sync_mirror  # noqa: PLC0415
-    from xync.telegram import (
-        notify_sync_finish as notify_telegram_finish,  # noqa: PLC0415
-    )
-    from xync.telegram import notify_sync_result as notify_telegram  # noqa: PLC0415
-    from xync.telegram import (
-        notify_sync_start as notify_telegram_start,  # noqa: PLC0415
-    )
-    from xync.utils import (  # noqa: PLC0415
-        make_progress_callback,
-        notify_disk_warning_if_needed,
-        record_sync_result,
-    )
+    # Late import: xync.api imports this module's PID helpers at load time.
+    from xync.api import init_api_state, start_api_server_thread  # noqa: PLC0415
 
     pid_file = get_pid_file(config_dir)
     pid_file.write_text(str(os.getpid()))
@@ -197,10 +181,7 @@ def run_daemon_loop(
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    cfg = load_config(config_dir)
     if api_enabled:
-        from xync.api import init_api_state, start_api_server_thread  # noqa: PLC0415
-
         init_api_state(config_dir)
         start_api_server_thread(port=api_port)
         _log(f"API server started on port {api_port}")
@@ -255,87 +236,17 @@ def run_daemon_loop(
                 _log("No enabled mirrors to sync.")
             else:
                 _log(f"Starting sync cycle for {len(targets)} mirror(s).")
-
-                for mirror in targets:
-                    notify_telegram_start(cfg.global_config.telegram, mirror.name)
-                    notify_discord_start(cfg.global_config.discord, mirror.name)
-
-                def _sync_one(mirror):
-                    log_dir = log_dir_base / mirror.name
-                    on_progress = None
-                    if (
-                        cfg.global_config.telegram.notify_on_progress
-                        or cfg.global_config.discord.notify_on_progress
-                    ):
-                        on_progress = make_progress_callback(
-                            cfg.global_config.telegram,
-                            cfg.global_config.discord,
-                            mirror.name,
-                        )
-                    result = sync_mirror(mirror, log_dir, on_progress=on_progress)
-                    return mirror, result
-
-                results = []
-                if cfg.global_config.parallel_jobs > 1 and len(targets) > 1:
-                    with ThreadPoolExecutor(
-                        max_workers=cfg.global_config.parallel_jobs
-                    ) as executor:
-                        futures = [executor.submit(_sync_one, m) for m in targets]
-                        for future in as_completed(futures):
-                            results.append(future.result())
-                else:
-                    for mirror in targets:
-                        if not running[0]:
-                            break
-                        results.append(_sync_one(mirror))
-
-                for mirror, result in results:
-                    if result is None:
-                        continue
-
-                    # Reload config before saving to avoid clobbering concurrent edits.
-                    cfg = load_config(config_dir)
-                    record_sync_result(cfg, config_dir, mirror, result)
-
-                    notify_telegram_finish(
-                        cfg.global_config.telegram,
-                        mirror.name,
-                        result.status,
-                        result.duration_seconds,
-                        result.error,
-                    )
-                    notify_discord_finish(
-                        cfg.global_config.discord,
-                        mirror.name,
-                        result.status,
-                        result.duration_seconds,
-                        result.error,
-                    )
-                    notify_telegram(
-                        cfg.global_config.telegram,
-                        mirror.name,
-                        result.status,
-                        result.duration_seconds,
-                        result.error,
-                    )
-                    notify_discord(
-                        cfg.global_config.discord,
-                        mirror.name,
-                        result.status,
-                        result.duration_seconds,
-                        result.error,
-                    )
-                    notify_disk_warning_if_needed(cfg, mirror)
-                    purge_old_logs(
-                        log_dir_base / mirror.name,
-                        mirror.name,
-                        cfg.global_config.max_log_files,
-                    )
-
-                    _log(
+                run_sync_batch(
+                    cfg,
+                    config_dir,
+                    log_dir_base,
+                    targets,
+                    should_stop=lambda: not running[0],
+                    report=lambda mirror, result: _log(
                         f"Mirror {mirror.name}: {result.status.value} "
                         f"({result.duration_seconds:.1f}s)"
-                    )
+                    ),
+                )
 
             # Interval sleep (only when cron is not configured)
             if not cfg.global_config.daemon_schedule:

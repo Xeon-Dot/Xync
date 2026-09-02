@@ -57,6 +57,21 @@ class TestTransport:
         assert url == WEBHOOK_URL
         assert payload == {"content": "Hello!"}
 
+    def test_discord_send_posts_embed(self):
+        cfg = _make_dc()
+        embed = {"title": "Test", "color": 0x2ECC71}
+        with patch("xync.notify.post_json", return_value=True) as mock_post:
+            assert notify._send_discord(cfg, embed=embed) is True
+        url, payload = mock_post.call_args[0]
+        assert url == WEBHOOK_URL
+        assert payload == {"embeds": [embed]}
+
+    def test_discord_skips_when_empty_payload(self):
+        cfg = _make_dc()
+        with patch("xync.notify.post_json") as mock_post:
+            assert notify._send_discord(cfg) is False
+        mock_post.assert_not_called()
+
     def test_discord_skips_when_unconfigured(self):
         cfg = DiscordConfig(webhook_url=None)
         with patch("xync.notify.post_json") as mock_post:
@@ -74,17 +89,25 @@ class TestNotifySyncResult:
             notify.notify_sync_result(gc, "ubuntu", SyncStatus.SUCCESS, 12.5)
         assert "SUCCESS" in mock_tg.call_args[0][1]
         assert "12.5s" in mock_tg.call_args[0][1]
-        assert "ubuntu" in mock_dc.call_args[0][1]
+        embed = mock_dc.call_args.kwargs["embed"]
+        assert "SUCCESS" in embed["title"]
+        assert any(f["value"] == "ubuntu" for f in embed["fields"])
 
     def test_sends_failure_with_error(self):
         gc = _make_global(_make_tg(), _make_dc())
-        with patch("xync.notify._send_telegram") as mock_tg:
+        with (
+            patch("xync.notify._send_telegram") as mock_tg,
+            patch("xync.notify._send_discord") as mock_dc,
+        ):
             notify.notify_sync_result(
                 gc, "debian", SyncStatus.FAILED, 3.0, "rsync failed"
             )
         text = mock_tg.call_args[0][1]
         assert "FAILED" in text
         assert "rsync failed" in text
+        embed = mock_dc.call_args.kwargs["embed"]
+        assert "FAILED" in embed["title"]
+        assert any(f["value"] == "rsync failed" for f in embed["fields"])
 
     def test_skips_success_when_notify_on_success_false(self):
         gc = _make_global(
@@ -141,7 +164,9 @@ class TestNotifySyncStart:
         ):
             notify.notify_sync_start(gc, "ubuntu")
         assert "STARTED" in mock_tg.call_args[0][1]
-        assert "ubuntu" in mock_dc.call_args[0][1]
+        embed = mock_dc.call_args.kwargs["embed"]
+        assert "ubuntu" in embed["title"]
+        assert any(f["value"] == "ubuntu" for f in embed["fields"])
 
     def test_skips_when_notify_on_start_false(self):
         gc = _make_global(_make_tg(), _make_dc())
@@ -173,7 +198,9 @@ class TestNotifySyncProgress:
         ):
             notify.notify_sync_progress(gc, "ubuntu", 70)
         assert "70%" in mock_tg.call_args[0][1]
-        assert "ubuntu" in mock_dc.call_args[0][1]
+        embed = mock_dc.call_args.kwargs["embed"]
+        assert "70%" in str(embed)
+        assert any(f["value"] == "ubuntu" for f in embed["fields"])
 
     def test_skips_when_notify_on_progress_false(self):
         gc = _make_global()
@@ -203,6 +230,9 @@ class TestNotifyDiskWarning:
         assert "91.5%" in text
         assert "/srv/mirrors/ubuntu" in text
         mock_dc.assert_called_once()
+        embed = mock_dc.call_args.kwargs["embed"]
+        assert "91.5%" in str(embed)
+        assert "/srv/mirrors/ubuntu" in str(embed)
 
     def test_skips_below_threshold(self):
         gc = _make_global(_make_tg(), _make_dc())
@@ -241,6 +271,67 @@ class TestHelpers:
             assert notify.send_test_notification(gc, "telegram") is True
         mock_tg.assert_called_once()
 
+    def test_send_test_notification_discord(self):
+        gc = _make_global(_make_tg(), _make_dc())
+        with patch("xync.notify._send_discord", return_value=True) as mock_dc:
+            assert notify.send_test_notification(gc, "discord") is True
+        mock_dc.assert_called_once()
+        embed = mock_dc.call_args.kwargs["embed"]
+        assert "Test Notification" in embed["title"]
+
     def test_send_test_notification_unknown_channel(self):
         gc = _make_global()
         assert notify.send_test_notification(gc, "email") is False
+
+
+class TestDiscordEmbeds:
+    def test_start_embed(self):
+        embed = notify.discord_start_embed("arch")
+        assert "arch" in embed["title"]
+        assert embed["color"] == notify._COLOR_INFO
+        assert any(
+            f["name"] == "Mirror" and f["value"] == "arch" for f in embed["fields"]
+        )
+
+    def test_result_embed_success(self):
+        embed = notify.discord_result_embed("debian", SyncStatus.SUCCESS, 4.2)
+        assert "SUCCESS" in embed["title"]
+        assert embed["color"] == notify._COLOR_SUCCESS
+        assert any(
+            f["name"] == "Duration" and f["value"] == "4.2s" for f in embed["fields"]
+        )
+        assert not any(f["name"] == "Error" for f in embed["fields"])
+
+    def test_result_embed_failure_truncates_long_error(self):
+        long_error = "x" * 2000
+        embed = notify.discord_result_embed(
+            "debian", SyncStatus.FAILED, 1.0, error=long_error
+        )
+        assert "FAILED" in embed["title"]
+        assert embed["color"] == notify._COLOR_FAILURE
+        error_field = next(f for f in embed["fields"] if f["name"] == "Error")
+        assert len(error_field["value"]) <= 1003
+        assert error_field["value"].endswith("...")
+
+    def test_progress_embed(self):
+        embed = notify.discord_progress_embed("ubuntu", 85)
+        assert "ubuntu" in embed["title"]
+        assert any(
+            f["name"] == "Progress" and f["value"] == "85%" for f in embed["fields"]
+        )
+
+    def test_disk_embed(self):
+        embed = notify.discord_disk_embed("ubuntu", 92.3, 90, "/data")
+        assert "ubuntu" in embed["title"]
+        assert embed["color"] == notify._COLOR_WARNING
+        assert any(
+            f["name"] == "Usage" and f["value"] == "92.3%" for f in embed["fields"]
+        )
+        assert any(
+            f["name"] == "Path" and f["value"] == "/data" for f in embed["fields"]
+        )
+
+    def test_test_embed(self):
+        embed = notify.discord_test_embed()
+        assert "Test Notification" in embed["title"]
+        assert embed["color"] == notify._COLOR_SUCCESS

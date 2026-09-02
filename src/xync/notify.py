@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 
 _TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 
+_COLOR_SUCCESS = 0x2ECC71
+_COLOR_FAILURE = 0xE74C3C
+_COLOR_INFO = 0x5865F2
+_COLOR_WARNING = 0xF1C40F
+
 
 def post_json(url: str, payload: dict, timeout: float = 10) -> bool:
     """POST *payload* as JSON to *url*; return True on a successful response."""
@@ -73,6 +78,80 @@ def disk_text(
     )
 
 
+def discord_start_embed(mirror_name: str) -> dict:
+    return {
+        "title": f"🔄 [{mirror_name}] Sync Started",
+        "color": _COLOR_INFO,
+        "fields": [
+            {"name": "Mirror", "value": mirror_name, "inline": True},
+            {"name": "Status", "value": "Started", "inline": True},
+        ],
+        "footer": {"text": "xync"},
+    }
+
+
+def discord_result_embed(
+    mirror_name: str,
+    status: SyncStatus,
+    duration_seconds: float,
+    error: Optional[str] = None,
+) -> dict:
+    fields = [
+        {"name": "Mirror", "value": mirror_name, "inline": True},
+        {"name": "Status", "value": status.value.upper(), "inline": True},
+        {"name": "Duration", "value": f"{duration_seconds:.1f}s", "inline": True},
+    ]
+    if error:
+        error_val = error[:1000] + "..." if len(error) > 1000 else error
+        fields.append({"name": "Error", "value": error_val, "inline": False})
+    return {
+        "title": f"{_status_emoji(status)} [{mirror_name}] {status.value.upper()}",
+        "color": _COLOR_SUCCESS if status == SyncStatus.SUCCESS else _COLOR_FAILURE,
+        "fields": fields,
+        "footer": {"text": "xync"},
+    }
+
+
+def discord_progress_embed(mirror_name: str, progress_pct: int) -> dict:
+    return {
+        "title": f"📊 [{mirror_name}] Sync Progress",
+        "color": _COLOR_INFO,
+        "fields": [
+            {"name": "Mirror", "value": mirror_name, "inline": True},
+            {"name": "Progress", "value": f"{progress_pct}%", "inline": True},
+        ],
+        "footer": {"text": "xync"},
+    }
+
+
+def discord_disk_embed(
+    mirror_name: str,
+    usage_percent: float,
+    threshold_percent: int,
+    path: str,
+) -> dict:
+    return {
+        "title": f"⚠️ [{mirror_name}] Disk Usage Warning",
+        "color": _COLOR_WARNING,
+        "fields": [
+            {"name": "Mirror", "value": mirror_name, "inline": True},
+            {"name": "Usage", "value": f"{usage_percent:.1f}%", "inline": True},
+            {"name": "Threshold", "value": f"{threshold_percent}%", "inline": True},
+            {"name": "Path", "value": path, "inline": False},
+        ],
+        "footer": {"text": "xync"},
+    }
+
+
+def discord_test_embed() -> dict:
+    return {
+        "title": "✅ xync Test Notification",
+        "description": "Discord webhook integration is working properly.",
+        "color": _COLOR_SUCCESS,
+        "footer": {"text": "xync"},
+    }
+
+
 def _send_telegram(cfg: TelegramConfig, text: str) -> bool:
     """Send *text* via the Telegram Bot API; no-op (False) when unconfigured."""
     if not (cfg.bot_token and cfg.chat_id):
@@ -81,11 +160,23 @@ def _send_telegram(cfg: TelegramConfig, text: str) -> bool:
     return post_json(url, {"chat_id": cfg.chat_id, "text": text})
 
 
-def _send_discord(cfg: DiscordConfig, text: str) -> bool:
-    """Send *text* via a Discord webhook; no-op (False) when unconfigured."""
+def _send_discord(
+    cfg: DiscordConfig,
+    text: str = "",
+    *,
+    embed: Optional[dict] = None,
+) -> bool:
+    """Send message via a Discord webhook; no-op (False) when unconfigured."""
     if not cfg.webhook_url:
         return False
-    return post_json(cfg.webhook_url, {"content": text})
+    payload: dict = {}
+    if text:
+        payload["content"] = text
+    if embed:
+        payload["embeds"] = [embed]
+    if not payload:
+        return False
+    return post_json(cfg.webhook_url, payload)
 
 
 def _wants_result(cfg, status: SyncStatus) -> bool:
@@ -103,7 +194,7 @@ def notify_sync_start(global_config: GlobalConfig, mirror_name: str) -> None:
     if tg.notify_on_start:
         _send_telegram(tg, start_text(mirror_name))
     if dc.notify_on_start:
-        _send_discord(dc, start_text(mirror_name))
+        _send_discord(dc, embed=discord_start_embed(mirror_name))
 
 
 def notify_sync_result(
@@ -117,11 +208,13 @@ def notify_sync_result(
     tg, dc = global_config.telegram, global_config.discord
     if not _wants_result(tg, status) and not _wants_result(dc, status):
         return
-    text = result_text(mirror_name, status, duration_seconds, error)
     if _wants_result(tg, status):
-        _send_telegram(tg, text)
+        _send_telegram(tg, result_text(mirror_name, status, duration_seconds, error))
     if _wants_result(dc, status):
-        _send_discord(dc, text)
+        _send_discord(
+            dc,
+            embed=discord_result_embed(mirror_name, status, duration_seconds, error),
+        )
 
 
 def notify_sync_progress(
@@ -134,7 +227,7 @@ def notify_sync_progress(
     if tg.notify_on_progress:
         _send_telegram(tg, progress_text(mirror_name, progress_pct))
     if dc.notify_on_progress:
-        _send_discord(dc, progress_text(mirror_name, progress_pct))
+        _send_discord(dc, embed=discord_progress_embed(mirror_name, progress_pct))
 
 
 def notify_disk_warning(global_config: GlobalConfig, mirror: Mirror) -> None:
@@ -149,11 +242,17 @@ def notify_disk_warning(global_config: GlobalConfig, mirror: Mirror) -> None:
     tg, dc = global_config.telegram, global_config.discord
     if not (tg.notify_on_failure or dc.notify_on_failure):
         return
-    text = disk_text(mirror.name, usage_percent, threshold, str(usage_path))
     if tg.notify_on_failure:
-        _send_telegram(tg, text)
+        _send_telegram(
+            tg, disk_text(mirror.name, usage_percent, threshold, str(usage_path))
+        )
     if dc.notify_on_failure:
-        _send_discord(dc, text)
+        _send_discord(
+            dc,
+            embed=discord_disk_embed(
+                mirror.name, usage_percent, threshold, str(usage_path)
+            ),
+        )
 
 
 def make_progress_callback(
@@ -170,9 +269,8 @@ def make_progress_callback(
 
 def send_test_notification(global_config: GlobalConfig, channel: str) -> bool:
     """Send a test message through *channel* (``telegram`` or ``discord``)."""
-    text = "✅ xync test notification"
     if channel == "telegram":
-        return _send_telegram(global_config.telegram, text)
+        return _send_telegram(global_config.telegram, "✅ xync test notification")
     if channel == "discord":
-        return _send_discord(global_config.discord, text)
+        return _send_discord(global_config.discord, embed=discord_test_embed())
     return False

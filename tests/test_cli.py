@@ -348,9 +348,7 @@ class TestSync:
         result = runner.invoke(app, ["sync", "nonexistent"] + make_cfg_opt(tmp_path))
         assert result.exit_code != 0
 
-    def test_sends_start_before_result_notifications(
-        self, tmp_path, mocker
-    ):
+    def test_sends_start_before_result_notifications(self, tmp_path, mocker):
         runner.invoke(
             app,
             [
@@ -422,9 +420,7 @@ class TestNotifyCommands:
             app,
             ["config", "set", "telegram.chat_id", "chat456"] + make_cfg_opt(tmp_path),
         )
-        mock_send = mocker.patch(
-            "xync.main.send_test_notification", return_value=True
-        )
+        mock_send = mocker.patch("xync.main.send_test_notification", return_value=True)
 
         result = runner.invoke(
             app, ["notify", "test", "telegram"] + make_cfg_opt(tmp_path)
@@ -521,9 +517,7 @@ class TestDaemonCommands:
         assert "SIGKILL" in result.output
         mock_stop.assert_called_once_with(mocker.ANY, True)
 
-    def test_daemon_sends_start_before_result_notifications(
-        self, tmp_path, mocker
-    ):
+    def test_daemon_sends_start_before_result_notifications(self, tmp_path, mocker):
         from xync.config import load_config, save_config
         from xync.daemon import run_daemon_loop
         from xync.models import Mirror, MirrorType

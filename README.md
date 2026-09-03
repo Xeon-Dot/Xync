@@ -29,7 +29,9 @@ Linux 미러 저장소를 동기화하고 관리하는 CLI 도구입니다.
 ### 런타임
 
 - Linux 환경
+
 <!--- Python `>= 3.11`-->
+
 - [`uv`](https://docs.astral.sh/uv/) 패키지/툴 매니저
 - `rsync` — rsync 미러 사용 시 필요
 - `wget` — HTTP/HTTPS/FTP 미러 사용 시 필요

@@ -33,6 +33,7 @@ uv build                # build sdist + wheel into dist/
 Pre-commit / formatter: **none configured** — only `ruff check` (no `format`, no `isort` config beyond the I rules). Don't add unrelated tooling without being asked.
 
 PyInstaller binary (optional):
+
 ```bash
 pip install pyinstaller
 pyinstaller xync.spec

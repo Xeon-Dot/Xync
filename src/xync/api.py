@@ -117,9 +117,7 @@ class _Handler(BaseHTTPRequestHandler):
             elif mirror_match:
                 name = mirror_match.group(1)
                 if mirror_match.group(2):
-                    payload = mirror_size_payload(
-                        name, _api_state.get("config_dir")
-                    )
+                    payload = mirror_size_payload(name, _api_state.get("config_dir"))
                 else:
                     payload = mirror_payload(name, _api_state.get("config_dir"))
                 self._send(200, payload)

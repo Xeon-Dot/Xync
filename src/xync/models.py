@@ -78,9 +78,7 @@ class Mirror(BaseModel):
         return v
 
 
-Credential = Annotated[
-    Optional[str], BeforeValidator(lambda v: v or None)
-]
+Credential = Annotated[Optional[str], BeforeValidator(lambda v: v or None)]
 
 
 class NotificationConfig(BaseModel):

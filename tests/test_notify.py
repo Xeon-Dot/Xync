@@ -5,7 +5,8 @@ from unittest.mock import patch
 from xync import notify
 from xync.models import DiscordConfig, GlobalConfig, SyncStatus, TelegramConfig
 
-WEBHOOK_URL = "https://discord.com/api/webhooks/123/token"
+BOT_TOKEN = "discord-bot-token"
+CHANNEL_ID = "123456789"
 
 
 class MirrorStub:
@@ -15,7 +16,7 @@ class MirrorStub:
 
 
 def _make_dc(**kwargs) -> DiscordConfig:
-    defaults = {"webhook_url": WEBHOOK_URL}
+    defaults = {"bot_token": BOT_TOKEN, "channel_id": CHANNEL_ID}
     defaults.update(kwargs)
     return DiscordConfig(**defaults)
 
@@ -49,13 +50,16 @@ class TestTransport:
             assert notify._send_telegram(cfg, "msg") is False
         mock_post.assert_not_called()
 
-    def test_discord_send_posts_webhook(self):
+    def test_discord_send_posts_bot_api(self):
         cfg = _make_dc()
         with patch("xync.notify.post_json", return_value=True) as mock_post:
             assert notify._send_discord(cfg, "Hello!") is True
         url, payload = mock_post.call_args[0]
-        assert url == WEBHOOK_URL
+        assert url == f"https://discord.com/api/v10/channels/{CHANNEL_ID}/messages"
         assert payload == {"content": "Hello!"}
+        assert mock_post.call_args.kwargs["headers"] == {
+            "Authorization": f"Bot {BOT_TOKEN}"
+        }
 
     def test_discord_send_posts_embed(self):
         cfg = _make_dc()
@@ -63,8 +67,11 @@ class TestTransport:
         with patch("xync.notify.post_json", return_value=True) as mock_post:
             assert notify._send_discord(cfg, embed=embed) is True
         url, payload = mock_post.call_args[0]
-        assert url == WEBHOOK_URL
+        assert url == f"https://discord.com/api/v10/channels/{CHANNEL_ID}/messages"
         assert payload == {"embeds": [embed]}
+        assert mock_post.call_args.kwargs["headers"] == {
+            "Authorization": f"Bot {BOT_TOKEN}"
+        }
 
     def test_discord_skips_when_empty_payload(self):
         cfg = _make_dc()
@@ -73,7 +80,13 @@ class TestTransport:
         mock_post.assert_not_called()
 
     def test_discord_skips_when_unconfigured(self):
-        cfg = DiscordConfig(webhook_url=None)
+        cfg = DiscordConfig(bot_token=None, channel_id=CHANNEL_ID)
+        with patch("xync.notify.post_json") as mock_post:
+            assert notify._send_discord(cfg, "msg") is False
+        mock_post.assert_not_called()
+
+    def test_discord_skips_when_channel_missing(self):
+        cfg = DiscordConfig(bot_token=BOT_TOKEN, channel_id=None)
         with patch("xync.notify.post_json") as mock_post:
             assert notify._send_discord(cfg, "msg") is False
         mock_post.assert_not_called()

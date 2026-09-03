@@ -569,16 +569,10 @@ def health(
         add_row("telegram", "config", "warning", "chat_id set but bot_token missing")
 
     dc = cfg.global_config.discord
-    if dc.webhook_url:
-        if not dc.webhook_url.startswith("https://"):
-            add_row("discord", "config", "error", "webhook_url must use HTTPS")
-        elif not dc.webhook_url.startswith("https://discord.com/api/webhooks/"):
-            add_row(
-                "discord",
-                "config",
-                "warning",
-                "webhook_url does not look like a Discord webhook URL",
-            )
+    if dc.bot_token and not dc.channel_id:
+        add_row("discord", "config", "warning", "bot_token set but channel_id missing")
+    elif dc.channel_id and not dc.bot_token:
+        add_row("discord", "config", "warning", "channel_id set but bot_token missing")
 
     targets = (
         _resolve_sync_targets(cfg, names, skip_disabled=False)
@@ -671,15 +665,9 @@ def config_show(
     table.add_row("telegram.notify_on_finish", str(tg.notify_on_finish))
     table.add_row("telegram.notify_on_progress", str(tg.notify_on_progress))
     dc = gc.discord
-    masked_webhook = "(not set)"
-    if dc.webhook_url:
-        prefix = "https://discord.com/api/webhooks/"
-        if dc.webhook_url.startswith(prefix):
-            masked_webhook = prefix + "…" + dc.webhook_url[-6:]
-        else:
-            chunk = dc.webhook_url[:12] + "…"
-            masked_webhook = chunk if len(dc.webhook_url) > 12 else dc.webhook_url
-    table.add_row("discord.webhook_url", masked_webhook)
+    masked_dc_token = (dc.bot_token[:6] + "…") if dc.bot_token else "(not set)"
+    table.add_row("discord.bot_token", masked_dc_token)
+    table.add_row("discord.channel_id", dc.channel_id or "(not set)")
     table.add_row("discord.notify_on_success", str(dc.notify_on_success))
     table.add_row("discord.notify_on_failure", str(dc.notify_on_failure))
     table.add_row("discord.notify_on_start", str(dc.notify_on_start))

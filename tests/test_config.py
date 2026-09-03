@@ -105,15 +105,15 @@ class TestLoadSaveConfig:
 
     def test_discord_config_roundtrip(self, tmp_config_dir):
         cfg = xyncConfig()
-        cfg.global_config.discord.webhook_url = (
-            "https://discord.com/api/webhooks/123/token"
-        )
+        cfg.global_config.discord.bot_token = "discord-bot-token"
+        cfg.global_config.discord.channel_id = "123456789"
         cfg.global_config.discord.notify_on_success = False
         cfg.global_config.discord.notify_on_failure = True
         save_config(cfg, tmp_config_dir)
         loaded = load_config(tmp_config_dir)
         dc = loaded.global_config.discord
-        assert dc.webhook_url == "https://discord.com/api/webhooks/123/token"
+        assert dc.bot_token == "discord-bot-token"
+        assert dc.channel_id == "123456789"
         assert dc.notify_on_success is False
         assert dc.notify_on_failure is True
 
@@ -122,7 +122,8 @@ class TestLoadSaveConfig:
         save_config(cfg, tmp_config_dir)
         loaded = load_config(tmp_config_dir)
         dc = loaded.global_config.discord
-        assert dc.webhook_url is None
+        assert dc.bot_token is None
+        assert dc.channel_id is None
         assert dc.notify_on_success is True
         assert dc.notify_on_failure is True
 

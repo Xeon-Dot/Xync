@@ -111,9 +111,12 @@ class TelegramConfig(NotificationConfig):
 
 
 class DiscordConfig(NotificationConfig):
-    """Discord webhook notification configuration."""
+    """Discord bot notification configuration."""
 
-    webhook_url: Credential = Field(None, description="Discord webhook URL")
+    bot_token: Credential = Field(None, description="Discord bot token")
+    channel_id: Credential = Field(
+        None, description="Discord channel ID to send notifications to"
+    )
 
 
 class GlobalConfig(BaseModel):
@@ -157,7 +160,7 @@ class GlobalConfig(BaseModel):
     )
     discord: DiscordConfig = Field(
         default_factory=DiscordConfig,
-        description="Discord webhook notification settings",
+        description="Discord bot notification settings",
     )
 
 

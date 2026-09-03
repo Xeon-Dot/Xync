@@ -14,6 +14,7 @@ from xync.utils import disk_usage_for_path
 logger = logging.getLogger(__name__)
 
 _TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
+_DISCORD_API_URL = "https://discord.com/api/v10/channels/{channel_id}/messages"
 
 _COLOR_SUCCESS = 0x2ECC71
 _COLOR_FAILURE = 0xE74C3C
@@ -21,12 +22,17 @@ _COLOR_INFO = 0x5865F2
 _COLOR_WARNING = 0xF1C40F
 
 
-def post_json(url: str, payload: dict, timeout: float = 10) -> bool:
+def post_json(
+    url: str, payload: dict, timeout: float = 10, headers: Optional[dict] = None
+) -> bool:
     """POST *payload* as JSON to *url*; return True on a successful response."""
+    merged_headers = {"Content-Type": "application/json"}
+    if headers:
+        merged_headers.update(headers)
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        headers=merged_headers,
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -161,7 +167,7 @@ def discord_test_embed() -> dict:
     return _embed(
         "✅ xync Test Notification",
         _COLOR_SUCCESS,
-        desc="Discord webhook integration is working properly.",
+        desc="Discord bot integration is working properly.",
     )
 
 
@@ -179,8 +185,8 @@ def _send_discord(
     *,
     embed: Optional[dict] = None,
 ) -> bool:
-    """Send message via a Discord webhook; no-op (False) when unconfigured."""
-    if not cfg.webhook_url:
+    """Send message via the Discord Bot API; no-op (False) when unconfigured."""
+    if not (cfg.bot_token and cfg.channel_id):
         return False
     payload: dict = {}
     if text:
@@ -189,7 +195,10 @@ def _send_discord(
         payload["embeds"] = [embed]
     if not payload:
         return False
-    return post_json(cfg.webhook_url, payload)
+    url = _DISCORD_API_URL.format(channel_id=cfg.channel_id)
+    return post_json(
+        url, payload, headers={"Authorization": f"Bot {cfg.bot_token}"}
+    )
 
 
 def _wants_result(cfg, status: SyncStatus) -> bool:

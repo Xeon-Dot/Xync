@@ -388,7 +388,8 @@ xync config set telegram.chat_id "-100123456"
 ### Discord 설정
 
 ```bash
-xync config set discord.webhook_url "https://discord.com/api/webhooks/..."
+xync config set discord.bot_token "YOUR_DISCORD_BOT_TOKEN"
+xync config set discord.channel_id "123456789012345678"
 ```
 
 ### 알림 옵션 변경
@@ -436,7 +437,8 @@ xync config set disk_usage_warning_percent 85
 | `disk_usage_warning_percent` | `90`                   | 디스크 사용률 경고 임계치       |
 | `telegram.bot_token`         | 없음                   | Telegram Bot API 토큰           |
 | `telegram.chat_id`           | 없음                   | Telegram 채팅 ID                |
-| `discord.webhook_url`        | 없음                   | Discord Webhook URL             |
+| `discord.bot_token`          | 없음                   | Discord 봇 토큰                 |
+| `discord.channel_id`         | 없음                   | Discord 채널 ID                 |
 
 알림 플래그는 Telegram/Discord 각각에 대해 설정할 수 있습니다.
 
@@ -481,7 +483,8 @@ notify_on_finish = false
 notify_on_progress = false
 
 [global.discord]
-webhook_url = ""
+bot_token = ""
+channel_id = ""
 notify_on_success = true
 notify_on_failure = true
 notify_on_start = false

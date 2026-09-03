@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import urllib.error
 import urllib.request
 from typing import Callable, Optional
+
+import nextcord
 
 from xync.models import DiscordConfig, GlobalConfig, Mirror, SyncStatus, TelegramConfig
 from xync.utils import disk_usage_for_path
@@ -14,7 +17,6 @@ from xync.utils import disk_usage_for_path
 logger = logging.getLogger(__name__)
 
 _TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
-_DISCORD_API_URL = "https://discord.com/api/v10/channels/{channel_id}/messages"
 
 _COLOR_SUCCESS = 0x2ECC71
 _COLOR_FAILURE = 0xE74C3C
@@ -38,6 +40,19 @@ def post_json(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             response.read()
         return True
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8", "replace")[:500]
+        except OSError:
+            detail = ""
+        logger.warning(
+            "Notification POST to %s failed: HTTP %s %s: %s",
+            url,
+            exc.code,
+            exc.reason,
+            detail,
+        )
+        return False
     except (urllib.error.URLError, OSError, ValueError) as exc:
         logger.warning("Notification POST to %s failed: %s", url, exc)
         return False
@@ -89,26 +104,19 @@ def _embed(
     color: int,
     *fields: tuple,
     desc: Optional[str] = None,
-) -> dict:
-    res = {
-        "title": title,
-        "color": color,
-        "fields": [
-            {
-                "name": f[0],
-                "value": f[1],
-                "inline": f[2] if len(f) > 2 else True,
-            }
-            for f in fields
-        ],
-        "footer": {"text": "xync"},
-    }
-    if desc:
-        res["description"] = desc
-    return res
+) -> nextcord.Embed:
+    embed = nextcord.Embed(title=title, description=desc, colour=color)
+    for f in fields:
+        embed.add_field(
+            name=f[0],
+            value=f[1],
+            inline=f[2] if len(f) > 2 else True,
+        )
+    embed.set_footer(text="xync")
+    return embed
 
 
-def discord_start_embed(mirror_name: str) -> dict:
+def discord_start_embed(mirror_name: str) -> nextcord.Embed:
     return _embed(
         f"🔄 [{mirror_name}] Sync Started",
         _COLOR_INFO,
@@ -122,7 +130,7 @@ def discord_result_embed(
     status: SyncStatus,
     duration_seconds: float,
     error: Optional[str] = None,
-) -> dict:
+) -> nextcord.Embed:
     fields: list[tuple] = [
         ("Mirror", mirror_name),
         ("Status", status.value.upper()),
@@ -138,7 +146,7 @@ def discord_result_embed(
     )
 
 
-def discord_progress_embed(mirror_name: str, progress_pct: int) -> dict:
+def discord_progress_embed(mirror_name: str, progress_pct: int) -> nextcord.Embed:
     return _embed(
         f"📊 [{mirror_name}] Sync Progress",
         _COLOR_INFO,
@@ -152,7 +160,7 @@ def discord_disk_embed(
     usage_percent: float,
     threshold_percent: int,
     path: str,
-) -> dict:
+) -> nextcord.Embed:
     return _embed(
         f"⚠️ [{mirror_name}] Disk Usage Warning",
         _COLOR_WARNING,
@@ -163,7 +171,7 @@ def discord_disk_embed(
     )
 
 
-def discord_test_embed() -> dict:
+def discord_test_embed() -> nextcord.Embed:
     return _embed(
         "✅ xync Test Notification",
         _COLOR_SUCCESS,
@@ -179,26 +187,47 @@ def _send_telegram(cfg: TelegramConfig, text: str) -> bool:
     return post_json(url, {"chat_id": cfg.chat_id, "text": text})
 
 
+async def _deliver_discord(
+    token: str,
+    channel_id: int,
+    text: str = "",
+    embed: Optional[nextcord.Embed] = None,
+) -> None:
+    """Deliver one message through nextcord (REST only, no gateway)."""
+    client = nextcord.Client(intents=nextcord.Intents.none())
+    try:
+        await client.login(token)
+        channel = await client.fetch_channel(channel_id)
+        if embed is not None:
+            await channel.send(content=text or None, embed=embed)
+        else:
+            await channel.send(content=text)
+    finally:
+        await client.close()
+
+
 def _send_discord(
     cfg: DiscordConfig,
     text: str = "",
     *,
-    embed: Optional[dict] = None,
+    embed: Optional[nextcord.Embed] = None,
 ) -> bool:
-    """Send message via the Discord Bot API; no-op (False) when unconfigured."""
+    """Send message via nextcord; no-op (False) when unconfigured."""
     if not (cfg.bot_token and cfg.channel_id):
         return False
-    payload: dict = {}
-    if text:
-        payload["content"] = text
-    if embed:
-        payload["embeds"] = [embed]
-    if not payload:
+    if not text and embed is None:
         return False
-    url = _DISCORD_API_URL.format(channel_id=cfg.channel_id)
-    return post_json(
-        url, payload, headers={"Authorization": f"Bot {cfg.bot_token}"}
-    )
+    try:
+        channel_id = int(cfg.channel_id)
+    except (TypeError, ValueError):
+        logger.warning("Invalid Discord channel_id: %r", cfg.channel_id)
+        return False
+    try:
+        asyncio.run(_deliver_discord(cfg.bot_token, channel_id, text, embed))
+        return True
+    except Exception as exc:
+        logger.warning("Discord notification failed: %s", exc)
+        return False
 
 
 def _wants_result(cfg, status: SyncStatus) -> bool:

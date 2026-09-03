@@ -1,6 +1,6 @@
 [project]
 name = "xync"
-version = "1.7.0"
+version = "1.8.0"
 description = "Linux mirror synchronization and management CLI tool"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -10,7 +10,7 @@ dependencies = [
     "tomli-w>=1.2.0",
     "pydantic>=2.11.1",
     "croniter>=6.0.0",
-    "nextcord>=2.6.0",
+    "nextcord[speed]>=2.6.0",
 ]
 
 [project.scripts]

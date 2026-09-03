@@ -127,21 +127,27 @@ class GlobalConfig(BaseModel):
         "", description="Directory for sync logs (default: config_dir/logs)"
     )
     max_log_files: int = Field(
-        30, description="Maximum number of log files to keep per mirror"
+        30, ge=1, description="Maximum number of log files to keep per mirror"
     )
-    parallel_jobs: int = Field(1, description="Number of mirrors to sync in parallel")
+    parallel_jobs: int = Field(
+        1, ge=1, description="Number of mirrors to sync in parallel"
+    )
     daemon_interval: int = Field(
-        3600, description="Daemon sync interval in seconds (default: 3600)"
+        3600, ge=1, description="Daemon sync interval in seconds (default: 3600)"
     )
     api_enabled: bool = Field(
         False, description="Enable API server when daemon starts (default: False)"
     )
-    api_port: int = Field(58080, description="API server port (default: 58080)")
+    api_port: int = Field(
+        58080, ge=1, le=65535, description="API server port (default: 58080)"
+    )
     daemon_schedule: Optional[str] = Field(
         None, description="Cron expression for daemon scheduling (e.g. '0 2 * * *')"
     )
     disk_usage_warning_percent: int = Field(
         90,
+        ge=1,
+        le=100,
         description=(
             "Send a warning when a mirror filesystem reaches this usage percent"
         ),
@@ -153,27 +159,6 @@ class GlobalConfig(BaseModel):
         default_factory=DiscordConfig,
         description="Discord webhook notification settings",
     )
-
-    @field_validator("max_log_files", "parallel_jobs", "daemon_interval")
-    @classmethod
-    def must_be_positive(cls, v: int) -> int:
-        if v < 1:
-            raise ValueError("Value must be greater than or equal to 1")
-        return v
-
-    @field_validator("api_port")
-    @classmethod
-    def valid_api_port(cls, v: int) -> int:
-        if v < 1 or v > 65535:
-            raise ValueError("API port must be between 1 and 65535")
-        return v
-
-    @field_validator("disk_usage_warning_percent")
-    @classmethod
-    def valid_disk_usage_warning_percent(cls, v: int) -> int:
-        if v < 1 or v > 100:
-            raise ValueError("Disk usage warning percent must be between 1 and 100")
-        return v
 
 
 class xyncConfig(BaseModel):

@@ -337,37 +337,22 @@ def _run_without_progress(
     log_fh,
     verbose: bool,
 ) -> int:
-    """Run *cmd* as a subprocess, writing output to *log_fh* and optionally to console.
-
-    Returns the process exit code.
-    """
+    """Run *cmd*, writing output to *log_fh* and optionally to console."""
     if verbose:
-        with subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        ) as proc:
-            for line in proc.stdout:  # type: ignore[union-attr]  # ty:ignore[not-iterable]
-                log_fh.write(line)
-                print(line, end="")
-        return proc.returncode
-    else:
-        proc = subprocess.run(
-            cmd,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=False,
-        )
-        return proc.returncode
+        return _run_with_progress(cmd, log_fh, on_progress=None, verbose=True)
+    return subprocess.run(
+        cmd,
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    ).returncode
 
 
 def _run_with_progress(
     cmd: list[str],
     log_fh,
-    on_progress: Callable[[int], None],
+    on_progress: Optional[Callable[[int], None]] = None,
     verbose: bool = False,
 ) -> int:
     """Run *cmd* as a subprocess, streaming stdout line-by-line.
@@ -390,16 +375,16 @@ def _run_with_progress(
             if verbose:
                 print(line, end="")
 
-            match = _RSYNC_TOCHK_RE.search(line)
-            if match:
-                remaining = int(match.group(1))
-                total = int(match.group(2))
-                if total > 0:
-                    pct = int((total - remaining) / total * 100)
-                    milestone = (pct // 10) * 10
-                    if milestone > last_milestone:
-                        last_milestone = milestone
-                        on_progress(milestone)
+            if on_progress:
+                match = _RSYNC_TOCHK_RE.search(line)
+                if match:
+                    remaining, total = int(match.group(1)), int(match.group(2))
+                    if total > 0:
+                        pct = int((total - remaining) / total * 100)
+                        milestone = (pct // 10) * 10
+                        if milestone > last_milestone:
+                            last_milestone = milestone
+                            on_progress(milestone)
 
     return proc.returncode
 

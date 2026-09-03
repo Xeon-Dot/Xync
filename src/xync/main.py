@@ -7,9 +7,10 @@ import os
 import shutil
 import time
 from pathlib import Path
-from typing import Annotated, Optional, Union, get_args, get_origin
+from typing import Annotated, Optional, get_origin
 
 import typer
+from pydantic import BaseModel, ValidationError
 from rich import print as rprint
 from rich.console import Console
 from rich.table import Table
@@ -727,52 +728,28 @@ def _set_global_config_value(gc: GlobalConfig, key: str, value: str) -> None:
     _set_config_field(gc, key, value)
 
 
-def _set_config_field(obj, attr: str, value: str) -> None:
-    """Set a config field from a string, coercing by the field's declared type."""
-    annotation = type(obj).model_fields[attr].annotation
-    if annotation is int:
-        parsed = _parse_config_int(attr, value)
-        if attr == "disk_usage_warning_percent" and not 1 <= parsed <= 100:
-            rprint(
-                "[red]Error:[/red] 'disk_usage_warning_percent' must be "
-                "between 1 and 100."
-            )
-            raise typer.Exit(1)
-        setattr(obj, attr, parsed)
-    elif annotation is bool:
-        setattr(obj, attr, _parse_config_bool(attr, value))
-    elif get_origin(annotation) is list:
-        setattr(obj, attr, value.split())
-    elif annotation is str:
-        setattr(obj, attr, value)
-    elif get_origin(annotation) is Union and type(None) in get_args(annotation):
-        setattr(obj, attr, value or None)
-    else:
-        # Nested model (telegram/discord) or unsupported type: not directly settable.
+def _set_config_field(obj: BaseModel, attr: str, value: str) -> None:
+    """Set a config field from a string, validating via Pydantic."""
+    if isinstance(getattr(obj, attr, None), BaseModel):
         _unknown_config_key(attr)
+    val = (
+        value.split()
+        if get_origin(type(obj).model_fields[attr].annotation) is list
+        else value
+    )
+    try:
+        updated = type(obj).model_validate({**obj.model_dump(), attr: val})
+        setattr(obj, attr, getattr(updated, attr))
+    except ValidationError as exc:
+        rprint(
+            f"[red]Error:[/red] Invalid value for '{attr}': {exc.errors()[0]['msg']}"
+        )
+        raise typer.Exit(1) from exc
 
 
 def _unknown_config_key(key: str) -> None:
     valid = ", ".join(_valid_config_keys())
     rprint(f"[red]Error:[/red] Unknown key '{key}'. Valid keys: {valid}")
-    raise typer.Exit(1)
-
-
-def _parse_config_int(key: str, value: str) -> int:
-    try:
-        return int(value)
-    except ValueError:
-        rprint(f"[red]Error:[/red] '{key}' requires an integer value.")
-        raise typer.Exit(1)
-
-
-def _parse_config_bool(key: str, value: str) -> bool:
-    lowered = value.lower()
-    if lowered in {"true", "1", "yes"}:
-        return True
-    if lowered in {"false", "0", "no"}:
-        return False
-    rprint(f"[red]Error:[/red] '{key}' requires a boolean value (true/false).")
     raise typer.Exit(1)
 
 

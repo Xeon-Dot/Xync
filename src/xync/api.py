@@ -81,25 +81,27 @@ def mirrors_payload(config_dir: Optional[Path] = None) -> list[str]:
     return list(load_config(config_dir).mirrors)
 
 
-def mirror_payload(name: str, config_dir: Optional[Path] = None) -> dict:
-    """JSON payload for ``/api/mirrors/{name}``."""
+def _get_mirror(name: str, config_dir: Optional[Path] = None) -> Mirror:
     mirror = load_config(config_dir).mirrors.get(name)
     if mirror is None:
         raise MirrorNotFoundError(name)
-    return _mirror_payload(mirror)
+    return mirror
+
+
+def mirror_payload(name: str, config_dir: Optional[Path] = None) -> dict:
+    """JSON payload for ``/api/mirrors/{name}``."""
+    return _mirror_payload(_get_mirror(name, config_dir))
 
 
 def mirror_size_payload(name: str, config_dir: Optional[Path] = None) -> dict:
     """JSON payload for ``/api/mirrors/{name}/size``."""
-    mirror = load_config(config_dir).mirrors.get(name)
-    if mirror is None:
-        raise MirrorNotFoundError(name)
-    size_bytes = mirror.last_size or 0
+    mirror = _get_mirror(name, config_dir)
+    payload = _mirror_payload(mirror)
     return {
         "name": name,
         "local_path": mirror.local_path,
-        "size_bytes": size_bytes,
-        "size_human": format_size(size_bytes),
+        "size_bytes": payload["size_bytes"],
+        "size_human": payload["size_human"],
     }
 
 

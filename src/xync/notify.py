@@ -78,16 +78,37 @@ def disk_text(
     )
 
 
-def discord_start_embed(mirror_name: str) -> dict:
-    return {
-        "title": f"🔄 [{mirror_name}] Sync Started",
-        "color": _COLOR_INFO,
+def _embed(
+    title: str,
+    color: int,
+    *fields: tuple,
+    desc: Optional[str] = None,
+) -> dict:
+    res = {
+        "title": title,
+        "color": color,
         "fields": [
-            {"name": "Mirror", "value": mirror_name, "inline": True},
-            {"name": "Status", "value": "Started", "inline": True},
+            {
+                "name": f[0],
+                "value": f[1],
+                "inline": f[2] if len(f) > 2 else True,
+            }
+            for f in fields
         ],
         "footer": {"text": "xync"},
     }
+    if desc:
+        res["description"] = desc
+    return res
+
+
+def discord_start_embed(mirror_name: str) -> dict:
+    return _embed(
+        f"🔄 [{mirror_name}] Sync Started",
+        _COLOR_INFO,
+        ("Mirror", mirror_name),
+        ("Status", "Started"),
+    )
 
 
 def discord_result_embed(
@@ -96,32 +117,28 @@ def discord_result_embed(
     duration_seconds: float,
     error: Optional[str] = None,
 ) -> dict:
-    fields = [
-        {"name": "Mirror", "value": mirror_name, "inline": True},
-        {"name": "Status", "value": status.value.upper(), "inline": True},
-        {"name": "Duration", "value": f"{duration_seconds:.1f}s", "inline": True},
+    fields: list[tuple] = [
+        ("Mirror", mirror_name),
+        ("Status", status.value.upper()),
+        ("Duration", f"{duration_seconds:.1f}s"),
     ]
     if error:
-        error_val = error[:1000] + "..." if len(error) > 1000 else error
-        fields.append({"name": "Error", "value": error_val, "inline": False})
-    return {
-        "title": f"{_status_emoji(status)} [{mirror_name}] {status.value.upper()}",
-        "color": _COLOR_SUCCESS if status == SyncStatus.SUCCESS else _COLOR_FAILURE,
-        "fields": fields,
-        "footer": {"text": "xync"},
-    }
+        err_msg = error[:1000] + "..." if len(error) > 1000 else error
+        fields.append(("Error", err_msg, False))
+    return _embed(
+        f"{_status_emoji(status)} [{mirror_name}] {status.value.upper()}",
+        _COLOR_SUCCESS if status == SyncStatus.SUCCESS else _COLOR_FAILURE,
+        *fields,
+    )
 
 
 def discord_progress_embed(mirror_name: str, progress_pct: int) -> dict:
-    return {
-        "title": f"📊 [{mirror_name}] Sync Progress",
-        "color": _COLOR_INFO,
-        "fields": [
-            {"name": "Mirror", "value": mirror_name, "inline": True},
-            {"name": "Progress", "value": f"{progress_pct}%", "inline": True},
-        ],
-        "footer": {"text": "xync"},
-    }
+    return _embed(
+        f"📊 [{mirror_name}] Sync Progress",
+        _COLOR_INFO,
+        ("Mirror", mirror_name),
+        ("Progress", f"{progress_pct}%"),
+    )
 
 
 def discord_disk_embed(
@@ -130,26 +147,22 @@ def discord_disk_embed(
     threshold_percent: int,
     path: str,
 ) -> dict:
-    return {
-        "title": f"⚠️ [{mirror_name}] Disk Usage Warning",
-        "color": _COLOR_WARNING,
-        "fields": [
-            {"name": "Mirror", "value": mirror_name, "inline": True},
-            {"name": "Usage", "value": f"{usage_percent:.1f}%", "inline": True},
-            {"name": "Threshold", "value": f"{threshold_percent}%", "inline": True},
-            {"name": "Path", "value": path, "inline": False},
-        ],
-        "footer": {"text": "xync"},
-    }
+    return _embed(
+        f"⚠️ [{mirror_name}] Disk Usage Warning",
+        _COLOR_WARNING,
+        ("Mirror", mirror_name),
+        ("Usage", f"{usage_percent:.1f}%"),
+        ("Threshold", f"{threshold_percent}%"),
+        ("Path", path, False),
+    )
 
 
 def discord_test_embed() -> dict:
-    return {
-        "title": "✅ xync Test Notification",
-        "description": "Discord webhook integration is working properly.",
-        "color": _COLOR_SUCCESS,
-        "footer": {"text": "xync"},
-    }
+    return _embed(
+        "✅ xync Test Notification",
+        _COLOR_SUCCESS,
+        desc="Discord webhook integration is working properly.",
+    )
 
 
 def _send_telegram(cfg: TelegramConfig, text: str) -> bool:

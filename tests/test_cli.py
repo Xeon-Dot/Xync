@@ -292,6 +292,17 @@ class TestConfigCommands:
         assert result.exit_code == 0
         assert "telegram.chat_id" in result.output
 
+    def test_config_set_telegram_chat_id_negative(self, tmp_path):
+        from xync.config import load_config
+
+        result = runner.invoke(
+            app,
+            ["config", "set", "telegram.chat_id", "-100123456"]
+            + make_cfg_opt(tmp_path),
+        )
+        assert result.exit_code == 0, result.output
+        assert load_config(tmp_path).global_config.telegram.chat_id == "-100123456"
+
     def test_config_set_telegram_notify_on_success(self, tmp_path):
         result = runner.invoke(
             app,

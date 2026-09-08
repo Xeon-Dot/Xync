@@ -682,7 +682,7 @@ def config_show(
 # ---------------------------------------------------------------------------
 
 
-@config_app.command("set")
+@config_app.command("set", context_settings={"ignore_unknown_options": True})
 def config_set(
     key: Annotated[
         str,

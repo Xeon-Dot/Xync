@@ -1,4 +1,5 @@
 # Taste
+
 - Prefers bulk "Fix All" execution - applying all suggested shrink/yagni/native cleanups in one batch rather than piecemeal approvals. Confidence: 0.93
 - Prefers aggressive code shrinking and DRY consolidation - merging duplicated channel modules into a single dispatcher (notify.py), extracting shared base models (NotificationConfig/Credential), and centralizing duplicated pipelines into one helper (run_sync_batch). Confidence: 0.85
 - Prefers stdlib-native solutions over heavy frameworks when sufficient - e.g., http.server ThreadingHTTPServer over FastAPI/Uvicorn for simple JSON APIs to reduce dependencies. Confidence: 0.82

@@ -59,21 +59,37 @@ def is_running(pid_file: Path) -> bool:
         return True
 
 
-def stop_daemon(pid_file: Path, force: bool = False) -> bool:
+def stop_daemon(pid_file: Path, force: bool = False, timeout: float = 10.0) -> bool:
     """Send SIGTERM (or SIGKILL with force=True) to the recorded daemon process.
 
-    Returns ``True`` if a signal was delivered, ``False`` if the process was
-    not found (stale PID file is cleaned up automatically).
+    Polls until the process exits (up to *timeout* seconds) so callers that
+    restart the daemon don't race a still-alive predecessor over the PID file.
+
+    Returns ``True`` if the process was signalled and exited, ``False`` if the
+    process was not found (stale PID file is cleaned up automatically) or
+    failed to exit within the timeout.
     """
     pid = read_pid(pid_file)
     if pid is None:
         return False
     try:
         os.kill(pid, signal.SIGKILL if force else signal.SIGTERM)
-        return True
     except ProcessLookupError:
         pid_file.unlink(missing_ok=True)
         return False
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            pid_file.unlink(missing_ok=True)
+            return True
+        except PermissionError:
+            pid_file.unlink(missing_ok=True)
+            return True
+        time.sleep(0.1)
+    return False
 
 
 # ---------------------------------------------------------------------------

@@ -462,41 +462,41 @@ class TestDaemonCommands:
         assert "not running" in result.output
 
     def test_daemon_status_running(self, tmp_path, mocker):
-        mocker.patch("xync.daemon.is_running", return_value=True)
-        mocker.patch("xync.daemon.read_pid", return_value=12345)
+        mocker.patch("xync.main.is_running", return_value=True)
+        mocker.patch("xync.main.read_pid", return_value=12345)
         result = runner.invoke(app, ["daemon", "status"] + make_cfg_opt(tmp_path))
         assert result.exit_code == 0
         assert "12345" in result.output
 
     def test_daemon_stop_sends_sigterm(self, tmp_path, mocker):
-        mocker.patch("xync.daemon.is_running", return_value=True)
-        mocker.patch("xync.daemon.read_pid", return_value=12345)
-        mock_stop = mocker.patch("xync.daemon.stop_daemon", return_value=True)
+        mocker.patch("xync.main.is_running", return_value=True)
+        mocker.patch("xync.main.read_pid", return_value=12345)
+        mock_stop = mocker.patch("xync.main.stop_daemon", return_value=True)
         result = runner.invoke(app, ["daemon", "stop"] + make_cfg_opt(tmp_path))
         assert result.exit_code == 0
         assert "12345" in result.output
         mock_stop.assert_called_once()
 
     def test_daemon_start_already_running(self, tmp_path, mocker):
-        mocker.patch("xync.daemon.is_running", return_value=True)
-        mocker.patch("xync.daemon.read_pid", return_value=12345)
+        mocker.patch("xync.main.is_running", return_value=True)
+        mocker.patch("xync.main.read_pid", return_value=12345)
         result = runner.invoke(app, ["daemon", "start"] + make_cfg_opt(tmp_path))
         assert result.exit_code != 0
         assert "already running" in result.output
 
     def test_daemon_start_forks(self, tmp_path, mocker):
-        mocker.patch("xync.daemon.is_running", return_value=False)
-        mock_daemonize = mocker.patch("xync.daemon.daemonize")
-        mock_loop = mocker.patch("xync.daemon.run_daemon_loop")
+        mocker.patch("xync.main.is_running", return_value=False)
+        mock_daemonize = mocker.patch("xync.main.daemonize")
+        mock_loop = mocker.patch("xync.main.run_daemon_loop")
         result = runner.invoke(app, ["daemon", "start"] + make_cfg_opt(tmp_path))
         assert result.exit_code == 0
         mock_daemonize.assert_called_once()
         mock_loop.assert_called_once()
 
     def test_daemon_start_custom_interval(self, tmp_path, mocker):
-        mocker.patch("xync.daemon.is_running", return_value=False)
-        mocker.patch("xync.daemon.daemonize")
-        mock_loop = mocker.patch("xync.daemon.run_daemon_loop")
+        mocker.patch("xync.main.is_running", return_value=False)
+        mocker.patch("xync.main.daemonize")
+        mock_loop = mocker.patch("xync.main.run_daemon_loop")
         result = runner.invoke(
             app,
             ["daemon", "start", "--interval", "1800"] + make_cfg_opt(tmp_path),
@@ -510,17 +510,17 @@ class TestDaemonCommands:
             app,
             ["config", "set", "daemon_interval", "7200"] + make_cfg_opt(tmp_path),
         )
-        mocker.patch("xync.daemon.is_running", return_value=False)
-        mocker.patch("xync.daemon.daemonize")
-        mock_loop = mocker.patch("xync.daemon.run_daemon_loop")
+        mocker.patch("xync.main.is_running", return_value=False)
+        mocker.patch("xync.main.daemonize")
+        mock_loop = mocker.patch("xync.main.run_daemon_loop")
         runner.invoke(app, ["daemon", "start"] + make_cfg_opt(tmp_path))
         _cfg_dir, _names, interval, _api_enabled, _api_port = mock_loop.call_args[0]
         assert interval == 7200
 
     def test_daemon_stop_sends_sigkill_with_force(self, tmp_path, mocker):
-        mocker.patch("xync.daemon.is_running", return_value=True)
-        mocker.patch("xync.daemon.read_pid", return_value=12345)
-        mock_stop = mocker.patch("xync.daemon.stop_daemon", return_value=True)
+        mocker.patch("xync.main.is_running", return_value=True)
+        mocker.patch("xync.main.read_pid", return_value=12345)
+        mock_stop = mocker.patch("xync.main.stop_daemon", return_value=True)
         result = runner.invoke(
             app, ["daemon", "stop", "--force"] + make_cfg_opt(tmp_path)
         )

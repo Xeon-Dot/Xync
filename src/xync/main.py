@@ -8,6 +8,7 @@ import shutil
 import time
 from pathlib import Path
 from typing import Annotated, Optional, get_origin
+lazy import subprocess
 
 import typer
 from pydantic import BaseModel, ValidationError
@@ -20,6 +21,17 @@ from xync.models import GlobalConfig, Mirror, MirrorType, SyncStatus, xyncConfig
 from xync.notify import send_test_notification
 from xync.sync import SyncResult, diff_mirror, run_sync_batch
 from xync.utils import disk_usage_for_path, format_size
+lazy from xync.api import get_api_pid_file, init_api_state, run_api_server
+lazy from xync.daemon import (
+    daemonize,
+    get_daemon_log_file,
+    get_pid_file,
+    is_running,
+    read_pid,
+    run_daemon_loop,
+    stop_daemon,
+)
+lazy from xync.sync import _build_command
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -375,8 +387,6 @@ def sync(
             rprint(
                 f"\n[bold cyan]Syncing[/bold cyan] [bold]{mirror.name}[/bold]  ({mirror.url})"  # noqa: E501
             )
-            from xync.sync import _build_command
-
             try:
                 cmd = _build_command(mirror, check_tools=False)
                 rprint(f"  [dim]dry-run command:[/dim] {' '.join(cmd)}")
@@ -803,15 +813,6 @@ def daemon_start(
     terminal is closed or the user logs out.  Sync results are written to
     the daemon log file inside the config directory.
     """
-    from xync.daemon import (  # noqa: PLC0415
-        daemonize,
-        get_daemon_log_file,
-        get_pid_file,
-        is_running,
-        read_pid,
-        run_daemon_loop,
-    )
-
     cfg = load_config(config_dir)
     cfg_dir = get_config_dir(config_dir)
     pid_file = get_pid_file(cfg_dir)
@@ -856,13 +857,6 @@ def daemon_stop(
     ),
 ) -> None:
     """Stop the running background sync daemon."""
-    from xync.daemon import (
-        get_pid_file,
-        is_running,
-        read_pid,
-        stop_daemon,
-    )
-
     cfg_dir = get_config_dir(config_dir)
     pid_file = get_pid_file(cfg_dir)
 
@@ -884,13 +878,6 @@ def daemon_status(
     config_dir: ConfigDirOption = None,
 ) -> None:
     """Show whether the background sync daemon is running."""
-    from xync.daemon import (
-        get_daemon_log_file,
-        get_pid_file,
-        is_running,
-        read_pid,
-    )
-
     cfg_dir = get_config_dir(config_dir)
     pid_file = get_pid_file(cfg_dir)
     log_file = get_daemon_log_file(cfg_dir)
@@ -941,13 +928,6 @@ def daemon_restart(
     ),
 ) -> None:
     """Restart the background sync daemon."""
-    from xync.daemon import (
-        get_pid_file,
-        is_running,
-        read_pid,
-        stop_daemon,
-    )
-
     cfg_dir = get_config_dir(config_dir)
     pid_file = get_pid_file(cfg_dir)
 
@@ -1002,8 +982,6 @@ def daemon_install(
     config_dir: ConfigDirOption = None,
 ) -> None:
     """Install xync daemon as a systemd service."""
-    import subprocess  # noqa: PLC0415
-
     cfg_dir = get_config_dir(config_dir)
     xync_bin = shutil.which("xync")
     if not xync_bin:
@@ -1043,8 +1021,6 @@ def daemon_uninstall(
     ] = False,
 ) -> None:
     """Remove the xync daemon systemd service."""
-    import subprocess  # noqa: PLC0415
-
     if system:
         unit_path = Path("/etc/systemd/system/xync-daemon.service")
         systemctl = ["systemctl"]
@@ -1178,9 +1154,6 @@ def api_start(
     config_dir: ConfigDirOption = None,
 ) -> None:
     """Start the API server."""
-    from xync.api import get_api_pid_file, init_api_state, run_api_server
-    from xync.daemon import is_running
-
     cfg_dir = get_config_dir(config_dir)
     pid_file = get_api_pid_file(cfg_dir)
 
@@ -1206,9 +1179,6 @@ def api_stop(
     ),
 ) -> None:
     """Stop a running API server process."""
-    from xync.api import get_api_pid_file
-    from xync.daemon import is_running, read_pid, stop_daemon
-
     cfg_dir = get_config_dir(config_dir)
     pid_file = get_api_pid_file(cfg_dir)
 
@@ -1230,9 +1200,6 @@ def api_status(
     config_dir: ConfigDirOption = None,
 ) -> None:
     """Show whether the API server is running."""
-    from xync.api import get_api_pid_file
-    from xync.daemon import is_running, read_pid
-
     cfg_dir = get_config_dir(config_dir)
     pid_file = get_api_pid_file(cfg_dir)
 

@@ -99,6 +99,7 @@ def sync_mirror(
     log_dir: Path,
     verbose: bool = False,
     on_progress: Optional[Callable[[int], None]] = None,
+    bandwidth_limit: Optional[str] = None,
 ) -> SyncResult:
     """Run a sync for the given mirror and return a :class:`SyncResult`.
 
@@ -110,6 +111,8 @@ def sync_mirror(
             a new 10 % progress milestone is reached (rsync only).  The callback
             is called with ``0`` immediately before the process starts and with
             ``100`` when the file-transfer loop completes.
+        bandwidth_limit: Global download limit used when the mirror has no
+            limit of its own.
 
     Returns:
         A :class:`SyncResult` describing the outcome.
@@ -135,7 +138,7 @@ def sync_mirror(
 
     try:
         try:
-            cmd = _build_command(mirror)
+            cmd = _build_command(mirror, bandwidth_limit=bandwidth_limit)
         except FileNotFoundError as exc:
             return SyncResult(
                 mirror_name=mirror.name,
@@ -254,7 +257,13 @@ def run_sync_batch(
         on_progress = None
         if gc.telegram.notify_on_progress or gc.discord.notify_on_progress:
             on_progress = notify.make_progress_callback(gc, mirror.name)
-        result = sync_mirror(mirror, log_dir, verbose=verbose, on_progress=on_progress)
+        result = sync_mirror(
+            mirror,
+            log_dir,
+            verbose=verbose,
+            on_progress=on_progress,
+            bandwidth_limit=gc.bandwidth_limit,
+        )
         return mirror, result
 
     completed: list[tuple[Mirror, SyncResult]] = []
@@ -389,27 +398,44 @@ def _run_with_progress(
     return proc.returncode
 
 
-def _build_command(mirror: Mirror, check_tools: bool = True) -> list[str]:
+def _build_command(
+    mirror: Mirror,
+    check_tools: bool = True,
+    bandwidth_limit: Optional[str] = None,
+) -> list[str]:
     """Build the shell command list for syncing a mirror."""
     if mirror.mirror_type == MirrorType.RSYNC:
-        return _build_rsync_command(mirror, check_tools=check_tools)
+        return _build_rsync_command(
+            mirror, check_tools=check_tools, bandwidth_limit=bandwidth_limit
+        )
     if mirror.mirror_type in (MirrorType.HTTP, MirrorType.FTP):
-        return _build_wget_command(mirror, check_tools=check_tools)
+        return _build_wget_command(
+            mirror, check_tools=check_tools, bandwidth_limit=bandwidth_limit
+        )
     raise ValueError(f"Unsupported mirror type: {mirror.mirror_type}")
 
 
-def _build_rsync_command(mirror: Mirror, check_tools: bool = True) -> list[str]:
+def _build_rsync_command(
+    mirror: Mirror,
+    check_tools: bool = True,
+    bandwidth_limit: Optional[str] = None,
+) -> list[str]:
     """Build an rsync command."""
     if check_tools and not shutil.which("rsync"):
         raise FileNotFoundError("rsync is not installed or not on PATH")
+    limit = mirror.bandwidth_limit or bandwidth_limit
     cmd = ["rsync"] + list(mirror.rsync_options)
-    if mirror.bandwidth_limit:
-        cmd += [f"--bwlimit={mirror.bandwidth_limit}"]
+    if limit:
+        cmd += [f"--bwlimit={limit}"]
     cmd += [mirror.url.rstrip("/") + "/", mirror.local_path.rstrip("/") + "/"]
     return cmd
 
 
-def _build_wget_command(mirror: Mirror, check_tools: bool = True) -> list[str]:
+def _build_wget_command(
+    mirror: Mirror,
+    check_tools: bool = True,
+    bandwidth_limit: Optional[str] = None,
+) -> list[str]:
     """Build a wget mirror command for HTTP/FTP mirrors."""
     if check_tools and not shutil.which("wget"):
         raise FileNotFoundError("wget is not installed or not on PATH")
@@ -420,6 +446,9 @@ def _build_wget_command(mirror: Mirror, check_tools: bool = True) -> list[str]:
         "--directory-prefix",
         mirror.local_path,
     ] + list(mirror.http_options)
+    limit = mirror.bandwidth_limit or bandwidth_limit
+    if limit:
+        cmd.append(f"--limit-rate={limit}")
     cmd.append(mirror.url)
     return cmd
 

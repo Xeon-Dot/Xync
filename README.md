@@ -162,7 +162,7 @@ xync mirror add arch rsync://mirror.example.org/archlinux /srv/mirrors/arch --bw
 | --------------------- | ------------------------------------ |
 | `--type`, `-t`        | 미러 타입: `rsync`, `http`, `ftp`    |
 | `--description`, `-d` | 미러 설명                            |
-| `--bwlimit`, `-b`     | rsync 대역폭 제한. 예: `10m`, `50m`  |
+| `--bwlimit`, `-b`     | 다운로드 속도 제한(rsync/wget). 예: `10m` |
 | `--rsync-opts`        | 기본 rsync 옵션을 대체할 옵션 문자열 |
 
 미러 이름은 영문/숫자/하이픈/언더스코어만 사용할 수 있습니다.
@@ -430,6 +430,7 @@ xync config set disk_usage_warning_percent 85
 | `log_dir`                    | 설정 디렉터리의 `logs` | 동기화 로그 저장 경로           |
 | `max_log_files`              | `30`                   | 미러별 보관할 최대 로그 파일 수 |
 | `parallel_jobs`              | `1`                    | 병렬 동기화 작업 수             |
+| `bandwidth_limit`            | 비어 있음(제한 없음)   | 전체 다운로드 속도 제한         |
 | `daemon_interval`            | `3600`                 | 데몬 동기화 주기(초)            |
 | `daemon_schedule`            | 비어 있음              | cron 표현식 기반 스케줄         |
 | `api_enabled`                | `false`                | 데몬 시작 시 API 서버 함께 실행 |
@@ -453,6 +454,7 @@ xync config set disk_usage_warning_percent 85
 예시:
 
 ```bash
+xync config set bandwidth_limit 10m
 xync config set telegram.notify_on_success true
 xync config set discord.notify_on_progress false
 ```
@@ -467,6 +469,7 @@ default_rsync_options = ["-avz", "--delete"]
 log_dir = ""
 max_log_files = 30
 parallel_jobs = 1
+bandwidth_limit = ""
 daemon_interval = 3600
 daemon_schedule = ""
 api_enabled = false

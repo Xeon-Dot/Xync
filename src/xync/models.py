@@ -45,7 +45,10 @@ class Mirror(BaseModel):
         description="Extra options passed to wget/lftp for HTTP mirrors",
     )
     bandwidth_limit: Optional[str] = Field(
-        None, description="Bandwidth limit (e.g. '10m' for 10 MB/s, rsync only)"
+        None,
+        description=(
+            "Bandwidth limit (e.g. '10m' for 10 MB/s); applies to rsync and wget"
+        ),
     )
     last_sync: Optional[datetime] = Field(None, description="Timestamp of last sync")
     last_status: SyncStatus = Field(SyncStatus.NEVER, description="Last sync result")
@@ -134,6 +137,13 @@ class GlobalConfig(BaseModel):
     )
     parallel_jobs: int = Field(
         1, ge=1, description="Number of mirrors to sync in parallel"
+    )
+    bandwidth_limit: Optional[str] = Field(
+        None,
+        description=(
+            "Global download limit for all mirrors (e.g. '10m'); "
+            "a mirror's own limit overrides it"
+        ),
     )
     daemon_interval: int = Field(
         3600, ge=1, description="Daemon sync interval in seconds (default: 3600)"

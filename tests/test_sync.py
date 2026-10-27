@@ -71,6 +71,30 @@ class TestBuildCommand:
             with pytest.raises(FileNotFoundError, match="wget"):
                 _build_wget_command(http_mirror)
 
+    def test_rsync_global_limit_fallback(self, rsync_mirror):
+        with patch("xync.sync.shutil.which", return_value="/usr/bin/rsync"):
+            cmd = _build_rsync_command(rsync_mirror, bandwidth_limit="5m")
+        assert "--bwlimit=5m" in cmd
+
+    def test_rsync_mirror_limit_overrides_global(self, rsync_mirror):
+        rsync_mirror.bandwidth_limit = "10m"
+        with patch("xync.sync.shutil.which", return_value="/usr/bin/rsync"):
+            cmd = _build_rsync_command(rsync_mirror, bandwidth_limit="5m")
+        assert "--bwlimit=10m" in cmd
+        assert "--bwlimit=5m" not in cmd
+
+    def test_wget_global_limit_fallback(self, http_mirror):
+        with patch("xync.sync.shutil.which", return_value="/usr/bin/wget"):
+            cmd = _build_wget_command(http_mirror, bandwidth_limit="2m")
+        assert "--limit-rate=2m" in cmd
+
+    def test_wget_mirror_limit_overrides_global(self, http_mirror):
+        http_mirror.bandwidth_limit = "3m"
+        with patch("xync.sync.shutil.which", return_value="/usr/bin/wget"):
+            cmd = _build_wget_command(http_mirror, bandwidth_limit="2m")
+        assert "--limit-rate=3m" in cmd
+        assert "--limit-rate=2m" not in cmd
+
 
 class TestSyncMirror:
     def test_successful_sync(self, rsync_mirror, tmp_path):

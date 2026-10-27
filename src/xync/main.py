@@ -133,7 +133,9 @@ def mirror_add(
     ] = "",
     bandwidth_limit: Annotated[
         Optional[str],
-        typer.Option("--bwlimit", "-b", help="Bandwidth limit for rsync (e.g. '10m')."),
+        typer.Option(
+            "--bwlimit", "-b", help="Download limit for rsync/wget (e.g. '10m')."
+        ),
     ] = None,
     rsync_opts: Annotated[
         Optional[str],
@@ -388,7 +390,11 @@ def sync(
                 f"\n[bold cyan]Syncing[/bold cyan] [bold]{mirror.name}[/bold]  ({mirror.url})"  # noqa: E501
             )
             try:
-                cmd = _build_command(mirror, check_tools=False)
+                cmd = _build_command(
+                    mirror,
+                    check_tools=False,
+                    bandwidth_limit=cfg.global_config.bandwidth_limit,
+                )
                 rprint(f"  [dim]dry-run command:[/dim] {' '.join(cmd)}")
             except (FileNotFoundError, ValueError) as exc:
                 rprint(f"  [red]Could not build command:[/red] {exc}")
@@ -656,6 +662,7 @@ def config_show(
     table.add_row("log_dir", gc.log_dir or "(config_dir/logs)")
     table.add_row("max_log_files", str(gc.max_log_files))
     table.add_row("parallel_jobs", str(gc.parallel_jobs))
+    table.add_row("bandwidth_limit", gc.bandwidth_limit or "(not set)")
     table.add_row("daemon_interval", str(gc.daemon_interval))
     table.add_row("daemon_schedule", gc.daemon_schedule or "(not set)")
     table.add_row("api_enabled", str(gc.api_enabled))

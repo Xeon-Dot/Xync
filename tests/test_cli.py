@@ -253,6 +253,16 @@ class TestConfigCommands:
         assert result.exit_code == 0
         assert "max_log_files" in result.output
 
+    def test_config_set_bandwidth_limit(self, tmp_path):
+        from xync.config import load_config
+
+        result = runner.invoke(
+            app,
+            ["config", "set", "bandwidth_limit", "10m"] + make_cfg_opt(tmp_path),
+        )
+        assert result.exit_code == 0, result.output
+        assert load_config(tmp_path).global_config.bandwidth_limit == "10m"
+
     def test_config_set_invalid_key(self, tmp_path):
         result = runner.invoke(
             app, ["config", "set", "nonexistent_key", "value"] + make_cfg_opt(tmp_path)
@@ -354,6 +364,26 @@ class TestSync:
         )
         result = runner.invoke(app, ["sync", "--dry-run"] + make_cfg_opt(tmp_path))
         assert result.exit_code == 0
+
+    def test_sync_dry_run_includes_global_bandwidth_limit(self, tmp_path):
+        runner.invoke(
+            app,
+            [
+                "mirror",
+                "add",
+                "ubuntu",
+                "rsync://mirror.example.com/ubuntu",
+                "/srv/mirrors/ubuntu",
+            ]
+            + make_cfg_opt(tmp_path),
+        )
+        runner.invoke(
+            app,
+            ["config", "set", "bandwidth_limit", "10m"] + make_cfg_opt(tmp_path),
+        )
+        result = runner.invoke(app, ["sync", "--dry-run"] + make_cfg_opt(tmp_path))
+        assert result.exit_code == 0
+        assert "--bwlimit=10m" in result.output
 
     def test_sync_missing_mirror_fails(self, tmp_path):
         result = runner.invoke(app, ["sync", "nonexistent"] + make_cfg_opt(tmp_path))
